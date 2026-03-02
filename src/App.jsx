@@ -38,7 +38,14 @@ const DEFAULT_PROGRAMS = {
 
 const CATEGORY_COLORS = { Lower: "#7eb8f7", Upper: "#c8f542", Power: "#f7a07e" };
 const uid = () => Math.random().toString(36).slice(2, 9);
-const initialState = () => ({ weights: { ...DEFAULT_WEIGHTS }, history: [], programs: DEFAULT_PROGRAMS, activeProgram: "Starting Strength", currentDayIndex: 0 });
+const STORAGE_KEY = "strengthtracker_state";
+const initialState = () => {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved) return JSON.parse(saved);
+  } catch {}
+  return { weights: { ...DEFAULT_WEIGHTS }, history: [], programs: DEFAULT_PROGRAMS, activeProgram: "Starting Strength", currentDayIndex: 0 };
+};
 
 function SetTracker({ sets, reps, onComplete }) {
   const [completed, setCompleted] = useState([]);
@@ -198,6 +205,10 @@ export default function App() {
   const [showBuilder, setShowBuilder] = useState(false);
   const [editingProgram, setEditingProgram] = useState(null);
   const [showPicker, setShowPicker] = useState(false);
+
+  useEffect(() => {
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch {}
+  }, [state]);
 
   const program = state.programs[state.activeProgram] || [];
   const day = program[state.currentDayIndex] || program[0];
