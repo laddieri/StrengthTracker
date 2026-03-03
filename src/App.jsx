@@ -1,24 +1,19 @@
 import { useState, useEffect } from "react";
 
 const EXERCISE_LIBRARY = [
-  { name: "Squat",        defaultSets: 3, defaultReps: 5,  increment: 5,  category: "Lower" },
-  { name: "Deadlift",     defaultSets: 1, defaultReps: 5,  increment: 10, category: "Lower" },
-  { name: "Bench Press",  defaultSets: 3, defaultReps: 5,  increment: 5,  category: "Upper" },
-  { name: "Press",        defaultSets: 3, defaultReps: 5,  increment: 5,  category: "Upper" },
-  { name: "Power Clean",  defaultSets: 5, defaultReps: 3,  increment: 5,  category: "Power" },
-  { name: "Barbell Row",  defaultSets: 3, defaultReps: 5,  increment: 5,  category: "Upper" },
-  { name: "Chin-Up",      defaultSets: 3, defaultReps: 5,  increment: 2.5,category: "Upper" },
-  { name: "Dip",          defaultSets: 3, defaultReps: 5,  increment: 2.5,category: "Upper" },
-  { name: "Romanian DL",  defaultSets: 3, defaultReps: 5,  increment: 5,  category: "Lower" },
-  { name: "Front Squat",  defaultSets: 3, defaultReps: 5,  increment: 5,  category: "Lower" },
-  { name: "Power Snatch", defaultSets: 5, defaultReps: 3,  increment: 5,  category: "Power" },
-  { name: "Good Morning", defaultSets: 3, defaultReps: 8,  increment: 5,  category: "Lower" },
+  { name: "Squat",                defaultSets: 3, defaultReps: 5, increment: 5,   category: "Lower" },
+  { name: "Deadlift",             defaultSets: 1, defaultReps: 5, increment: 10,  category: "Lower" },
+  { name: "Bench Press",          defaultSets: 3, defaultReps: 5, increment: 5,   category: "Upper" },
+  { name: "Close-Grip Bench Press", defaultSets: 3, defaultReps: 8, increment: 5, category: "Upper" },
+  { name: "Overhead Press",       defaultSets: 3, defaultReps: 5, increment: 5,   category: "Upper" },
+  { name: "Barbell Curl",         defaultSets: 3, defaultReps: 8, increment: 2.5, category: "Upper" },
+  { name: "Skull Crusher",        defaultSets: 3, defaultReps: 8, increment: 2.5, category: "Upper" },
+  { name: "Chin-Up",              defaultSets: 3, defaultReps: 5, increment: 2.5, category: "Upper" },
 ];
 
 const DEFAULT_WEIGHTS = {
-  "Squat": 135, "Deadlift": 135, "Bench Press": 95, "Press": 65,
-  "Power Clean": 95, "Barbell Row": 95, "Chin-Up": 0, "Dip": 0,
-  "Romanian DL": 135, "Front Squat": 95, "Power Snatch": 65, "Good Morning": 65,
+  "Squat": 135, "Deadlift": 135, "Bench Press": 95, "Close-Grip Bench Press": 85,
+  "Overhead Press": 65, "Barbell Curl": 45, "Skull Crusher": 45, "Chin-Up": 0,
 };
 
 const DEFAULT_PROGRAMS = {
@@ -29,9 +24,9 @@ const DEFAULT_PROGRAMS = {
       { name: "Deadlift",    sets: 1, reps: 5, increment: 10 },
     ]},
     { id: "ss-b", label: "B", exercises: [
-      { name: "Squat",       sets: 3, reps: 5, increment: 5 },
-      { name: "Press",       sets: 3, reps: 5, increment: 5 },
-      { name: "Power Clean", sets: 5, reps: 3, increment: 5 },
+      { name: "Squat",          sets: 3, reps: 5, increment: 5   },
+      { name: "Overhead Press", sets: 3, reps: 5, increment: 5   },
+      { name: "Chin-Up",        sets: 3, reps: 5, increment: 2.5 },
     ]},
   ],
 };
