@@ -31,16 +31,104 @@ const DEFAULT_PROGRAMS = {
   ],
 };
 
+const DEFAULT_EQUIPMENT = {
+  activeBar: "45lb Bar",
+  bars: [
+    { name: "45lb Bar", weight: 45 },
+    { name: "20lb Bar", weight: 20 },
+  ],
+  plates: [
+    { weight: 45,   count: 8 },
+    { weight: 35,   count: 4 },
+    { weight: 25,   count: 4 },
+    { weight: 10,   count: 8 },
+    { weight: 5,    count: 8 },
+    { weight: 2.5,  count: 4 },
+    { weight: 1.25, count: 4 },
+  ],
+};
+
+const WARMUP_PROTOCOL = [
+  { pct: 0.4, reps: 5 },
+  { pct: 0.5, reps: 5 },
+  { pct: 0.6, reps: 3 },
+  { pct: 0.7, reps: 2 },
+];
+
+function calcPlateLoading(targetWeight, barWeight, plates) {
+  const perSide = (targetWeight - barWeight) / 2;
+  if (perSide < 0) return null;
+  if (perSide < 0.001) return [];
+  const result = [];
+  let rem = perSide;
+  const sorted = [...plates].sort((a, b) => b.weight - a.weight);
+  for (const p of sorted) {
+    const use = Math.min(Math.floor(rem / p.weight + 1e-9), Math.floor(p.count / 2));
+    if (use > 0) { result.push({ weight: p.weight, count: use }); rem = Math.round((rem - use * p.weight) * 1000) / 1000; }
+  }
+  return Math.abs(rem) < 0.01 ? result : null;
+}
+
+function calcWarmupSets(workingWeight, barWeight) {
+  return WARMUP_PROTOCOL.map(({ pct, reps }) => ({
+    pct, reps,
+    weight: Math.max(Math.round(workingWeight * pct / 2.5) * 2.5, barWeight),
+  }));
+}
+
 const CATEGORY_COLORS = { Lower: "#7eb8f7", Upper: "#c8f542", Power: "#f7a07e" };
 const uid = () => Math.random().toString(36).slice(2, 9);
 const STORAGE_KEY = "strengthtracker_state";
 const initialState = () => {
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved) return JSON.parse(saved);
+    if (saved) return { equipment: DEFAULT_EQUIPMENT, ...JSON.parse(saved) };
   } catch {}
-  return { weights: { ...DEFAULT_WEIGHTS }, history: [], programs: DEFAULT_PROGRAMS, activeProgram: "Starting Strength", currentDayIndex: 0 };
+  return { weights: { ...DEFAULT_WEIGHTS }, history: [], programs: DEFAULT_PROGRAMS, activeProgram: "Starting Strength", currentDayIndex: 0, equipment: DEFAULT_EQUIPMENT };
 };
+
+function PlateLoadingDisplay({ weight, barWeight, plates }) {
+  if (weight <= 0) return null;
+  if (weight < barWeight) return <span style={{ fontSize: 10, fontFamily: "monospace", color: "#555" }}>bar only</span>;
+  const loading = calcPlateLoading(weight, barWeight, plates);
+  if (loading === null) return <span style={{ fontSize: 10, fontFamily: "monospace", color: "#c0392b" }}>can't load</span>;
+  if (loading.length === 0) return <span style={{ fontSize: 10, fontFamily: "monospace", color: "#444" }}>bar only</span>;
+  return (
+    <span style={{ fontSize: 10, fontFamily: "monospace", color: "#555" }}>
+      {loading.map(({ weight: pw, count }, i) => (
+        <span key={pw}>{i > 0 && <span style={{ color: "#2a2a2a" }}> + </span>}<span style={{ color: "#7eb8f7" }}>{count > 1 ? `${count}×` : ""}{pw}</span></span>
+      ))}
+      <span style={{ color: "#333" }}> / side</span>
+    </span>
+  );
+}
+
+function WarmupSection({ workingWeight, equipment }) {
+  const [open, setOpen] = useState(false);
+  const bar = equipment.bars.find((b) => b.name === equipment.activeBar) || equipment.bars[0];
+  const sets = calcWarmupSets(workingWeight, bar.weight);
+  return (
+    <div style={{ marginTop: 10 }}>
+      <button onClick={() => setOpen((o) => !o)} style={{ background: "none", border: "1px solid #1e1e1e", borderRadius: 4, color: "#444", cursor: "pointer", fontFamily: "monospace", fontSize: 9, padding: "4px 10px", letterSpacing: 1 }}>
+        {open ? "▲ WARMUP" : "▼ WARMUP"}
+      </button>
+      {open && (
+        <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 4 }}>
+          {sets.map(({ pct, reps, weight }) => (
+            <div key={pct} style={{ background: "#0a0a0a", border: "1px solid #1a1a1a", borderRadius: 6, padding: "7px 12px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+                <span style={{ color: "#444", fontFamily: "monospace", fontSize: 10, minWidth: 28 }}>{Math.round(pct * 100)}%</span>
+                <span style={{ color: "#666", fontFamily: "monospace", fontSize: 10 }}>{reps}r</span>
+                <span style={{ color: "#888", fontWeight: 700, fontSize: 13 }}>{weight}lb</span>
+              </div>
+              <PlateLoadingDisplay weight={weight} barWeight={bar.weight} plates={equipment.plates} />
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function SetTracker({ sets, reps, onComplete }) {
   const [completed, setCompleted] = useState([]);
@@ -55,10 +143,11 @@ function SetTracker({ sets, reps, onComplete }) {
   );
 }
 
-function ExerciseCard({ exercise, weight, onWeightChange, onComplete }) {
+function ExerciseCard({ exercise, weight, onWeightChange, onComplete, equipment }) {
   const [done, setDone] = useState(false);
   const lib = EXERCISE_LIBRARY.find((e) => e.name === exercise.name);
   const catColor = lib ? CATEGORY_COLORS[lib.category] : "#888";
+  const bar = equipment?.bars.find((b) => b.name === equipment.activeBar) || equipment?.bars[0];
   return (
     <div style={{ background: done ? "rgba(200,245,66,0.04)" : "#0f0f0f", border: `1px solid ${done ? "#c8f542" : "#1e1e1e"}`, borderLeft: `3px solid ${done ? "#c8f542" : catColor}`, borderRadius: 10, padding: "18px 20px", transition: "all 0.3s" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
@@ -69,16 +158,20 @@ function ExerciseCard({ exercise, weight, onWeightChange, onComplete }) {
           </div>
           <div style={{ color: "#444", fontSize: 11, marginTop: 2, fontFamily: "monospace" }}>{exercise.sets}×{exercise.reps} — +{exercise.increment}lb/session</div>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <button onClick={() => onWeightChange(Math.max(0, weight - exercise.increment))} style={{ width: 32, height: 32, borderRadius: 4, border: "1px solid #222", background: "#141414", color: "#777", cursor: "pointer", fontSize: 18 }}>−</button>
-          <div style={{ minWidth: 56, textAlign: "center" }}>
-            <div style={{ fontSize: 22, fontWeight: 700, color: "#c8f542" }}>{weight}</div>
-            <div style={{ fontSize: 9, color: "#444", fontFamily: "monospace" }}>LBS</div>
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <button onClick={() => onWeightChange(Math.max(0, weight - exercise.increment))} style={{ width: 32, height: 32, borderRadius: 4, border: "1px solid #222", background: "#141414", color: "#777", cursor: "pointer", fontSize: 18 }}>−</button>
+            <div style={{ minWidth: 56, textAlign: "center" }}>
+              <div style={{ fontSize: 22, fontWeight: 700, color: "#c8f542" }}>{weight}</div>
+              <div style={{ fontSize: 9, color: "#444", fontFamily: "monospace" }}>LBS</div>
+            </div>
+            <button onClick={() => onWeightChange(weight + exercise.increment)} style={{ width: 32, height: 32, borderRadius: 4, border: "1px solid #222", background: "#141414", color: "#777", cursor: "pointer", fontSize: 18 }}>+</button>
           </div>
-          <button onClick={() => onWeightChange(weight + exercise.increment)} style={{ width: 32, height: 32, borderRadius: 4, border: "1px solid #222", background: "#141414", color: "#777", cursor: "pointer", fontSize: 18 }}>+</button>
+          {bar && weight > 0 && <PlateLoadingDisplay weight={weight} barWeight={bar.weight} plates={equipment.plates} />}
         </div>
       </div>
       <SetTracker sets={exercise.sets} reps={exercise.reps} onComplete={(d) => { setDone(d); onComplete(exercise.name, d); }} />
+      {equipment && weight > 0 && <WarmupSection workingWeight={weight} equipment={equipment} />}
     </div>
   );
 }
@@ -192,6 +285,47 @@ function HistoryView({ history }) {
   );
 }
 
+function EquipmentView({ equipment, onUpdate }) {
+  const updateBar = (name) => onUpdate({ ...equipment, activeBar: name });
+  const updateCount = (weight, delta) => onUpdate({
+    ...equipment,
+    plates: equipment.plates.map((p) => p.weight === weight ? { ...p, count: Math.max(0, p.count + delta) } : p),
+  });
+  return (
+    <div>
+      <div style={{ fontSize: 22, fontWeight: 900, letterSpacing: 2, marginBottom: 16 }}>EQUIPMENT</div>
+
+      <div style={{ marginBottom: 20 }}>
+        <div style={{ fontSize: 10, color: "#444", fontFamily: "monospace", letterSpacing: 1, marginBottom: 8 }}>BARBELL</div>
+        <div style={{ display: "flex", gap: 8 }}>
+          {equipment.bars.map((b) => (
+            <button key={b.name} onClick={() => updateBar(b.name)} style={{ padding: "10px 16px", borderRadius: 7, border: `1px solid ${b.name === equipment.activeBar ? "#c8f542" : "#1e1e1e"}`, background: b.name === equipment.activeBar ? "rgba(200,245,66,0.08)" : "#0e0e0e", color: b.name === equipment.activeBar ? "#c8f542" : "#555", fontFamily: "monospace", fontSize: 12, cursor: "pointer", fontWeight: 700 }}>
+              {b.name}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div>
+        <div style={{ fontSize: 10, color: "#444", fontFamily: "monospace", letterSpacing: 1, marginBottom: 8 }}>PLATES — adjust how many you have available</div>
+        {equipment.plates.map((p) => (
+          <div key={p.weight} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: "#0e0e0e", border: "1px solid #1a1a1a", borderRadius: 8, padding: "10px 14px", marginBottom: 6 }}>
+            <div>
+              <span style={{ color: "#d0d0d0", fontFamily: "monospace", fontSize: 13, fontWeight: 700 }}>{p.weight}lb</span>
+              <span style={{ color: "#333", fontFamily: "monospace", fontSize: 10, marginLeft: 10 }}>{Math.floor(p.count / 2)} pair{Math.floor(p.count / 2) !== 1 ? "s" : ""}</span>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <button onClick={() => updateCount(p.weight, -2)} style={{ width: 30, height: 30, borderRadius: 4, border: "1px solid #222", background: "#141414", color: "#777", cursor: "pointer", fontSize: 16 }}>−</button>
+              <span style={{ minWidth: 28, textAlign: "center", color: "#c8f542", fontWeight: 700, fontFamily: "monospace", fontSize: 14 }}>{p.count}</span>
+              <button onClick={() => updateCount(p.weight, 2)} style={{ width: 30, height: 30, borderRadius: 4, border: "1px solid #222", background: "#141414", color: "#777", cursor: "pointer", fontSize: 16 }}>+</button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [state, setState] = useState(initialState);
   const [view, setView] = useState("workout");
@@ -223,6 +357,7 @@ export default function App() {
   const saveProgram = (name, days) => { setState((s) => ({ ...s, programs: { ...s.programs, [name]: days }, activeProgram: name, currentDayIndex: 0 })); setShowBuilder(false); setEditingProgram(null); setCompletedSets({}); setSessionKey((k) => k + 1); };
   const deleteProgram = (pname) => { if (!confirm(`Delete "${pname}"?`)) return; setState((s) => { const { [pname]: _, ...rest } = s.programs; return { ...s, programs: rest, activeProgram: Object.keys(rest)[0] || null, currentDayIndex: 0 }; }); };
   const selectProgram = (pname) => { setState((s) => ({ ...s, activeProgram: pname, currentDayIndex: 0 })); setCompletedSets({}); setSessionKey((k) => k + 1); setShowPicker(false); };
+  const updateEquipment = (eq) => setState((s) => ({ ...s, equipment: eq }));
   const nav = (label, active, onClick) => <button onClick={onClick} style={{ padding: "7px 13px", borderRadius: 6, border: "none", background: active ? "#c8f542" : "#141414", color: active ? "#0a0a0a" : "#555", fontFamily: "monospace", fontSize: 11, fontWeight: 700, cursor: "pointer", textTransform: "uppercase", letterSpacing: 1 }}>{label}</button>;
 
   return (
@@ -236,6 +371,7 @@ export default function App() {
           {nav("Workout", view === "workout", () => setView("workout"))}
           {nav("History", view === "history", () => setView("history"))}
           {nav("Programs", view === "programs", () => setView("programs"))}
+          {nav("Equipment", view === "equipment", () => setView("equipment"))}
         </div>
       </div>
 
@@ -260,7 +396,7 @@ export default function App() {
           {exercises.length === 0
             ? <div style={{ textAlign: "center", color: "#2a2a2a", padding: "60px 0", fontFamily: "monospace", fontSize: 12 }}>NO EXERCISES — GO TO PROGRAMS TAB</div>
             : <div style={{ display: "flex", flexDirection: "column", gap: 10 }} key={sessionKey}>
-                {exercises.map((ex) => <ExerciseCard key={ex.name} exercise={ex} weight={state.weights[ex.name] ?? 0} onWeightChange={(val) => updateWeight(ex.name, val)} onComplete={markComplete} />)}
+                {exercises.map((ex) => <ExerciseCard key={ex.name} exercise={ex} weight={state.weights[ex.name] ?? 0} onWeightChange={(val) => updateWeight(ex.name, val)} onComplete={markComplete} equipment={state.equipment} />)}
               </div>
           }
           <button onClick={finishWorkout} disabled={!allDone} style={{ width: "100%", marginTop: 16, padding: 15, background: allDone ? "#c8f542" : "#0d0d0d", color: allDone ? "#0a0a0a" : "#222", border: `1px solid ${allDone ? "#c8f542" : "#181818"}`, borderRadius: 10, fontWeight: 900, fontSize: 14, letterSpacing: 2, cursor: allDone ? "pointer" : "not-allowed", transition: "all 0.2s" }}>{allDone ? "✓ FINISH & LOG WORKOUT" : "COMPLETE ALL SETS TO FINISH"}</button>
@@ -271,6 +407,8 @@ export default function App() {
           <div style={{ fontSize: 22, fontWeight: 900, letterSpacing: 2, marginBottom: 14 }}>SESSION HISTORY</div>
           <HistoryView history={state.history} />
         </>}
+
+        {view === "equipment" && <EquipmentView equipment={state.equipment} onUpdate={updateEquipment} />}
 
         {view === "programs" && <>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
