@@ -82,9 +82,9 @@ const STORAGE_KEY = "strengthtracker_state";
 const initialState = () => {
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved) return { equipment: DEFAULT_EQUIPMENT, ...JSON.parse(saved) };
+    if (saved) return { equipment: DEFAULT_EQUIPMENT, customWorkout: { exercises: [] }, ...JSON.parse(saved) };
   } catch {}
-  return { weights: { ...DEFAULT_WEIGHTS }, history: [], programs: DEFAULT_PROGRAMS, activeProgram: "Starting Strength", currentDayIndex: 0, equipment: DEFAULT_EQUIPMENT };
+  return { weights: { ...DEFAULT_WEIGHTS }, history: [], programs: DEFAULT_PROGRAMS, activeProgram: "Starting Strength", currentDayIndex: 0, equipment: DEFAULT_EQUIPMENT, customWorkout: { exercises: [] } };
 };
 
 function PlateLoadingDisplay({ weight, barWeight, plates }) {
@@ -334,6 +334,7 @@ export default function App() {
   const [showBuilder, setShowBuilder] = useState(false);
   const [editingProgram, setEditingProgram] = useState(null);
   const [showPicker, setShowPicker] = useState(false);
+  const [isCustomMode, setIsCustomMode] = useState(false);
 
   useEffect(() => {
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch {}
@@ -341,18 +342,51 @@ export default function App() {
 
   const program = state.programs[state.activeProgram] || [];
   const day = program[state.currentDayIndex] || program[0];
-  const exercises = day?.exercises || [];
-  const allDone = exercises.length > 0 && exercises.every((ex) => completedSets[ex.name]);
+  const programExercises = day?.exercises || [];
+  const activeExercises = isCustomMode ? (state.customWorkout?.exercises || []) : programExercises;
+  const allDone = activeExercises.length > 0 && activeExercises.every((ex) => completedSets[ex.name]);
 
   const updateWeight = (name, val) => setState((s) => ({ ...s, weights: { ...s.weights, [name]: Math.max(0, val) } }));
   const markComplete = (name, isDone) => setCompletedSets((p) => ({ ...p, [name]: isDone }));
   const finishWorkout = () => {
-    if (!day) return;
-    const session = { date: Date.now(), programName: state.activeProgram, dayLabel: day.label, exercises: exercises.map((ex) => ({ name: ex.name, sets: ex.sets, reps: ex.reps, weight: state.weights[ex.name] ?? 0 })) };
+    if (!isCustomMode && !day) return;
+    const exes = isCustomMode ? (state.customWorkout?.exercises || []) : programExercises;
+    const session = {
+      date: Date.now(),
+      programName: isCustomMode ? "Custom" : state.activeProgram,
+      dayLabel: isCustomMode ? "Custom" : day.label,
+      exercises: exes.map((ex) => ({ name: ex.name, sets: ex.sets, reps: ex.reps, weight: state.weights[ex.name] ?? 0 })),
+    };
     const newWeights = { ...state.weights };
-    exercises.forEach((ex) => { newWeights[ex.name] = (state.weights[ex.name] ?? 0) + ex.increment; });
-    setState((s) => ({ ...s, weights: newWeights, history: [...s.history, session], currentDayIndex: (state.currentDayIndex + 1) % program.length }));
-    setCompletedSets({}); setSessionKey((k) => k + 1); setView("history");
+    exes.forEach((ex) => { newWeights[ex.name] = (state.weights[ex.name] ?? 0) + ex.increment; });
+    setState((s) => ({
+      ...s,
+      weights: newWeights,
+      history: [...s.history, session],
+      ...(isCustomMode ? { customWorkout: { exercises: [] } } : { currentDayIndex: (state.currentDayIndex + 1) % program.length }),
+    }));
+    setCompletedSets({}); setSessionKey((k) => k + 1);
+    if (isCustomMode) setIsCustomMode(false);
+    setView("history");
+  };
+  const addCustomExercise = (exName) => {
+    const lib = EXERCISE_LIBRARY.find((e) => e.name === exName);
+    if (!lib) return;
+    setState((s) => ({ ...s, customWorkout: { exercises: [...(s.customWorkout?.exercises || []), { name: exName, sets: lib.defaultSets, reps: lib.defaultReps, increment: lib.increment }] } }));
+  };
+  const removeCustomExercise = (exName) => {
+    setState((s) => ({ ...s, customWorkout: { exercises: (s.customWorkout?.exercises || []).filter((e) => e.name !== exName) } }));
+    setCompletedSets((p) => { const next = { ...p }; delete next[exName]; return next; });
+  };
+  const moveCustomExercise = (exName, dir) => {
+    setState((s) => {
+      const exes = [...(s.customWorkout?.exercises || [])];
+      const idx = exes.findIndex((e) => e.name === exName);
+      const next = idx + dir;
+      if (next < 0 || next >= exes.length) return s;
+      [exes[idx], exes[next]] = [exes[next], exes[idx]];
+      return { ...s, customWorkout: { exercises: exes } };
+    });
   };
   const saveProgram = (name, days) => { setState((s) => ({ ...s, programs: { ...s.programs, [name]: days }, activeProgram: name, currentDayIndex: 0 })); setShowBuilder(false); setEditingProgram(null); setCompletedSets({}); setSessionKey((k) => k + 1); };
   const deleteProgram = (pname) => { if (!confirm(`Delete "${pname}"?`)) return; setState((s) => { const { [pname]: _, ...rest } = s.programs; return { ...s, programs: rest, activeProgram: Object.keys(rest)[0] || null, currentDayIndex: 0 }; }); };
@@ -377,26 +411,53 @@ export default function App() {
 
       <div style={{ maxWidth: 580, margin: "0 auto", padding: "16px 14px 80px" }}>
         {view === "workout" && <>
-          <div style={{ background: "#0c0c0c", border: "1px solid #181818", borderRadius: 10, padding: "12px 16px", marginBottom: 14 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <div>
-                <div style={{ fontSize: 9, color: "#333", fontFamily: "monospace", letterSpacing: 1, marginBottom: 2 }}>ACTIVE PROGRAM</div>
-                <div style={{ fontSize: 17, fontWeight: 800, color: "#e0e0e0" }}>{state.activeProgram || "—"}</div>
+          {isCustomMode ? (
+            <div style={{ background: "#0c0c0c", border: "1px solid #1e1e1e", borderRadius: 10, padding: "12px 16px", marginBottom: 14 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                <div style={{ fontSize: 13, fontWeight: 800, letterSpacing: 2, color: "#c8f542" }}>CUSTOM WORKOUT</div>
+                <button onClick={() => { setIsCustomMode(false); setCompletedSets({}); setSessionKey((k) => k + 1); }} style={{ background: "none", border: "1px solid #1e1e1e", borderRadius: 5, color: "#555", cursor: "pointer", padding: "5px 10px", fontFamily: "monospace", fontSize: 10 }}>← PROGRAM</button>
               </div>
-              <button onClick={() => setShowPicker(true)} style={{ background: "none", border: "1px solid #1e1e1e", borderRadius: 5, color: "#555", cursor: "pointer", padding: "6px 12px", fontFamily: "monospace", fontSize: 10 }}>SWITCH</button>
+              {(state.customWorkout?.exercises || []).map((ex, idx) => {
+                const lib = EXERCISE_LIBRARY.find((e) => e.name === ex.name);
+                const c = lib ? CATEGORY_COLORS[lib.category] : "#888";
+                const last = idx === (state.customWorkout?.exercises || []).length - 1;
+                return (
+                  <div key={ex.name} style={{ display: "flex", alignItems: "center", gap: 6, background: "#111", border: "1px solid #1a1a1a", borderLeft: `3px solid ${c}`, borderRadius: 6, padding: "8px 10px", marginBottom: 5 }}>
+                    <span style={{ flex: 1, fontSize: 13, color: "#d0d0d0", fontWeight: 600 }}>{ex.name}</span>
+                    <span style={{ fontSize: 10, color: "#444", fontFamily: "monospace" }}>{ex.sets}×{ex.reps}</span>
+                    <button onClick={() => moveCustomExercise(ex.name, -1)} disabled={idx === 0} style={{ width: 28, height: 28, borderRadius: 4, border: "1px solid #222", background: "#141414", color: idx === 0 ? "#2a2a2a" : "#666", cursor: idx === 0 ? "default" : "pointer", fontSize: 13 }}>↑</button>
+                    <button onClick={() => moveCustomExercise(ex.name, 1)} disabled={last} style={{ width: 28, height: 28, borderRadius: 4, border: "1px solid #222", background: "#141414", color: last ? "#2a2a2a" : "#666", cursor: last ? "default" : "pointer", fontSize: 13 }}>↓</button>
+                    <button onClick={() => removeCustomExercise(ex.name)} style={{ width: 28, height: 28, borderRadius: 4, border: "1px solid #222", background: "#141414", color: "#c0392b", cursor: "pointer", fontSize: 13 }}>✕</button>
+                  </div>
+                );
+              })}
+              <ExercisePicker usedNames={(state.customWorkout?.exercises || []).map((e) => e.name)} onAdd={addCustomExercise} />
             </div>
-            {program.length > 1 && (
-              <div style={{ display: "flex", gap: 5, marginTop: 10 }}>
-                {program.map((d, i) => (
-                  <button key={d.id} onClick={() => { setState((s) => ({ ...s, currentDayIndex: i })); setCompletedSets({}); setSessionKey((k) => k + 1); }} style={{ padding: "5px 16px", borderRadius: 5, border: "none", background: state.currentDayIndex === i ? "#c8f542" : "#181818", color: state.currentDayIndex === i ? "#0a0a0a" : "#444", fontWeight: 700, fontSize: 13, cursor: "pointer" }}>DAY {d.label}</button>
-                ))}
+          ) : (
+            <div style={{ background: "#0c0c0c", border: "1px solid #181818", borderRadius: 10, padding: "12px 16px", marginBottom: 14 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <div>
+                  <div style={{ fontSize: 9, color: "#333", fontFamily: "monospace", letterSpacing: 1, marginBottom: 2 }}>ACTIVE PROGRAM</div>
+                  <div style={{ fontSize: 17, fontWeight: 800, color: "#e0e0e0" }}>{state.activeProgram || "—"}</div>
+                </div>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <button onClick={() => { setIsCustomMode(true); setCompletedSets({}); setSessionKey((k) => k + 1); }} style={{ background: "none", border: "1px solid #1e1e1e", borderRadius: 5, color: "#555", cursor: "pointer", padding: "6px 12px", fontFamily: "monospace", fontSize: 10 }}>CUSTOM</button>
+                  <button onClick={() => setShowPicker(true)} style={{ background: "none", border: "1px solid #1e1e1e", borderRadius: 5, color: "#555", cursor: "pointer", padding: "6px 12px", fontFamily: "monospace", fontSize: 10 }}>SWITCH</button>
+                </div>
               </div>
-            )}
-          </div>
-          {exercises.length === 0
-            ? <div style={{ textAlign: "center", color: "#2a2a2a", padding: "60px 0", fontFamily: "monospace", fontSize: 12 }}>NO EXERCISES — GO TO PROGRAMS TAB</div>
+              {program.length > 1 && (
+                <div style={{ display: "flex", gap: 5, marginTop: 10 }}>
+                  {program.map((d, i) => (
+                    <button key={d.id} onClick={() => { setState((s) => ({ ...s, currentDayIndex: i })); setCompletedSets({}); setSessionKey((k) => k + 1); }} style={{ padding: "5px 16px", borderRadius: 5, border: "none", background: state.currentDayIndex === i ? "#c8f542" : "#181818", color: state.currentDayIndex === i ? "#0a0a0a" : "#444", fontWeight: 700, fontSize: 13, cursor: "pointer" }}>DAY {d.label}</button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+          {activeExercises.length === 0
+            ? <div style={{ textAlign: "center", color: "#2a2a2a", padding: "60px 0", fontFamily: "monospace", fontSize: 12 }}>{isCustomMode ? "ADD EXERCISES ABOVE TO BEGIN" : "NO EXERCISES — GO TO PROGRAMS TAB"}</div>
             : <div style={{ display: "flex", flexDirection: "column", gap: 10 }} key={sessionKey}>
-                {exercises.map((ex) => <ExerciseCard key={ex.name} exercise={ex} weight={state.weights[ex.name] ?? 0} onWeightChange={(val) => updateWeight(ex.name, val)} onComplete={markComplete} equipment={state.equipment} />)}
+                {activeExercises.map((ex) => <ExerciseCard key={ex.name} exercise={ex} weight={state.weights[ex.name] ?? 0} onWeightChange={(val) => updateWeight(ex.name, val)} onComplete={markComplete} equipment={state.equipment} />)}
               </div>
           }
           <button onClick={finishWorkout} disabled={!allDone} style={{ width: "100%", marginTop: 16, padding: 15, background: allDone ? "#c8f542" : "#0d0d0d", color: allDone ? "#0a0a0a" : "#222", border: `1px solid ${allDone ? "#c8f542" : "#181818"}`, borderRadius: 10, fontWeight: 900, fontSize: 14, letterSpacing: 2, cursor: allDone ? "pointer" : "not-allowed", transition: "all 0.2s" }}>{allDone ? "✓ FINISH & LOG WORKOUT" : "COMPLETE ALL SETS TO FINISH"}</button>
