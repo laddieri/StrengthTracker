@@ -149,20 +149,28 @@ function SetTracker({ sets, defaultReps, defaultWeight, onUpdate }) {
 
   const toggle = (i) => setSetsData((prev) => prev.map((s, idx) => idx === i ? { ...s, completed: !s.completed } : s));
   const updateField = (i, field, val) => setSetsData((prev) => prev.map((s, idx) => idx === i ? { ...s, [field]: val } : s));
+  const addSet = () => setSetsData((prev) => {
+    const last = prev[prev.length - 1] || { weight: defaultWeight, reps: defaultReps };
+    return [...prev, { weight: last.weight, reps: last.reps, completed: false }];
+  });
+  const removeSet = (i) => setSetsData((prev) => prev.length > 1 ? prev.filter((_, idx) => idx !== i) : prev);
 
+  const canRemove = setsData.length > 1;
   const inpStyle = { background: "#111", border: "1px solid #3c3c3c", borderRadius: 4, color: "#e0e0e0", textAlign: "center", fontSize: 14, fontWeight: 700, padding: "4px 0", fontFamily: "monospace", outline: "none" };
   return (
     <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 5 }}>
       {setsData.map((set, i) => (
-        <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, background: set.completed ? "rgba(200,245,66,0.06)" : "#1a1a1a", border: `1px solid ${set.completed ? "#c8f542" : "#383838"}`, borderRadius: 8, padding: "7px 10px", transition: "all 0.15s" }}>
-          <span style={{ color: "#707070", fontFamily: "monospace", fontSize: 10, minWidth: 32 }}>SET {i + 1}</span>
-          <input type="number" value={set.weight} min={0} step={2.5} onChange={(e) => updateField(i, "weight", parseFloat(e.target.value) || 0)} style={{ ...inpStyle, width: 58 }} />
-          <span style={{ color: "#707070", fontFamily: "monospace", fontSize: 10 }}>lb ×</span>
-          <input type="number" value={set.reps} min={0} onChange={(e) => updateField(i, "reps", parseInt(e.target.value) || 0)} style={{ ...inpStyle, width: 34 }} />
-          <span style={{ color: "#707070", fontFamily: "monospace", fontSize: 10, flex: 1 }}>reps</span>
-          <button onClick={() => toggle(i)} style={{ width: 36, height: 36, borderRadius: 6, border: `2px solid ${set.completed ? "#c8f542" : "#4a4a4a"}`, background: set.completed ? "#c8f542" : "transparent", color: set.completed ? "#0a0a0a" : "#4a4a4a", fontSize: 16, cursor: "pointer", transition: "all 0.15s", flexShrink: 0 }}>{set.completed ? "✓" : ""}</button>
+        <div key={i} style={{ display: "flex", alignItems: "center", gap: 6, background: set.completed ? "rgba(200,245,66,0.06)" : "#1a1a1a", border: `1px solid ${set.completed ? "#c8f542" : "#383838"}`, borderRadius: 8, padding: "7px 10px", transition: "all 0.15s" }}>
+          <button onClick={() => removeSet(i)} disabled={!canRemove} style={{ width: 26, height: 26, borderRadius: 4, border: "1px solid #383838", background: "transparent", color: canRemove ? "#909090" : "#383838", cursor: canRemove ? "pointer" : "default", fontSize: 15, flexShrink: 0, lineHeight: 1 }}>−</button>
+          <span style={{ color: "#707070", fontFamily: "monospace", fontSize: 10, minWidth: 14, textAlign: "center" }}>{i + 1}</span>
+          <input type="number" value={set.weight} min={0} step={2.5} onChange={(e) => updateField(i, "weight", parseFloat(e.target.value) || 0)} style={{ ...inpStyle, width: 56 }} />
+          <span style={{ color: "#707070", fontFamily: "monospace", fontSize: 10 }}>lb×</span>
+          <input type="number" value={set.reps} min={0} onChange={(e) => updateField(i, "reps", parseInt(e.target.value) || 0)} style={{ ...inpStyle, width: 32 }} />
+          <span style={{ color: "#707070", fontFamily: "monospace", fontSize: 10, flex: 1 }}>r</span>
+          <button onClick={() => toggle(i)} style={{ width: 34, height: 34, borderRadius: 6, border: `2px solid ${set.completed ? "#c8f542" : "#4a4a4a"}`, background: set.completed ? "#c8f542" : "transparent", color: set.completed ? "#0a0a0a" : "#4a4a4a", fontSize: 16, cursor: "pointer", transition: "all 0.15s", flexShrink: 0 }}>{set.completed ? "✓" : ""}</button>
         </div>
       ))}
+      <button onClick={addSet} style={{ width: "100%", padding: "6px 0", background: "transparent", border: "1px dashed #3c3c3c", borderRadius: 6, color: "#808080", cursor: "pointer", fontFamily: "monospace", fontSize: 10, letterSpacing: 1 }}>+ ADD SET</button>
     </div>
   );
 }
