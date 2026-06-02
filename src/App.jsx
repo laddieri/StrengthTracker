@@ -362,12 +362,12 @@ export default function App() {
 
   return (
     <div style={{ minHeight: "100vh", background: "#080808", color: "#f0f0f0" }}>
-      <div style={{ borderBottom: "1px solid #111", padding: "12px 16px", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, background: "#080808", zIndex: 50 }}>
+      <div className="app-header">
         <div>
           <div style={{ fontSize: 18, fontWeight: 900, letterSpacing: 3, color: "#c8f542" }}>STARTING STRENGTH</div>
           <div style={{ fontSize: 9, color: "#2a2a2a", fontFamily: "monospace", letterSpacing: 2 }}>LINEAR PROGRESSION TRACKER</div>
         </div>
-        <div style={{ display: "flex", gap: 4 }}>
+        <div className="app-nav">
           {nav("Workout", view === "workout", () => setView("workout"))}
           {nav("History", view === "history", () => setView("history"))}
           {nav("Programs", view === "programs", () => setView("programs"))}
