@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 
 const EXERCISE_LIBRARY = [
   { name: "Squat",                defaultSets: 3, defaultReps: 5, increment: 5,   category: "Lower" },
@@ -130,14 +130,38 @@ function WarmupSection({ workingWeight, equipment }) {
   );
 }
 
-function SetTracker({ sets, reps, onComplete }) {
-  const [completed, setCompleted] = useState([]);
-  const toggle = (i) => setCompleted((p) => p.includes(i) ? p.filter((x) => x !== i) : [...p, i]);
-  useEffect(() => { onComplete(completed.length === sets && sets > 0); }, [completed, sets]);
+function SetTracker({ sets, defaultReps, defaultWeight, onUpdate }) {
+  const [setsData, setSetsData] = useState(
+    () => Array.from({ length: sets }, () => ({ weight: defaultWeight, reps: defaultReps, completed: false }))
+  );
+  const prevWeight = useRef(defaultWeight);
+
+  useEffect(() => {
+    if (prevWeight.current !== defaultWeight) {
+      setSetsData((prev) => prev.map((s) => s.completed ? s : { ...s, weight: defaultWeight }));
+      prevWeight.current = defaultWeight;
+    }
+  }, [defaultWeight]);
+
+  useEffect(() => {
+    onUpdate(setsData.length > 0 && setsData.every((s) => s.completed), setsData);
+  }, [setsData]);
+
+  const toggle = (i) => setSetsData((prev) => prev.map((s, idx) => idx === i ? { ...s, completed: !s.completed } : s));
+  const updateField = (i, field, val) => setSetsData((prev) => prev.map((s, idx) => idx === i ? { ...s, [field]: val } : s));
+
+  const inpStyle = { background: "#111", border: "1px solid #3c3c3c", borderRadius: 4, color: "#e0e0e0", textAlign: "center", fontSize: 14, fontWeight: 700, padding: "4px 0", fontFamily: "monospace", outline: "none" };
   return (
-    <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
-      {Array.from({ length: sets }, (_, i) => (
-        <button key={i} onClick={() => toggle(i)} style={{ width: 44, height: 44, borderRadius: 6, border: completed.includes(i) ? "2px solid #c8f542" : "2px solid #4a4a4a", background: completed.includes(i) ? "#c8f542" : "transparent", color: completed.includes(i) ? "#0a0a0a" : "#909090", fontSize: 11, fontFamily: "monospace", fontWeight: 700, cursor: "pointer", transition: "all 0.15s" }}>{reps}r</button>
+    <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 5 }}>
+      {setsData.map((set, i) => (
+        <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, background: set.completed ? "rgba(200,245,66,0.06)" : "#1a1a1a", border: `1px solid ${set.completed ? "#c8f542" : "#383838"}`, borderRadius: 8, padding: "7px 10px", transition: "all 0.15s" }}>
+          <span style={{ color: "#707070", fontFamily: "monospace", fontSize: 10, minWidth: 32 }}>SET {i + 1}</span>
+          <input type="number" value={set.weight} min={0} step={2.5} onChange={(e) => updateField(i, "weight", parseFloat(e.target.value) || 0)} style={{ ...inpStyle, width: 58 }} />
+          <span style={{ color: "#707070", fontFamily: "monospace", fontSize: 10 }}>lb ×</span>
+          <input type="number" value={set.reps} min={0} onChange={(e) => updateField(i, "reps", parseInt(e.target.value) || 0)} style={{ ...inpStyle, width: 34 }} />
+          <span style={{ color: "#707070", fontFamily: "monospace", fontSize: 10, flex: 1 }}>reps</span>
+          <button onClick={() => toggle(i)} style={{ width: 36, height: 36, borderRadius: 6, border: `2px solid ${set.completed ? "#c8f542" : "#4a4a4a"}`, background: set.completed ? "#c8f542" : "transparent", color: set.completed ? "#0a0a0a" : "#4a4a4a", fontSize: 16, cursor: "pointer", transition: "all 0.15s", flexShrink: 0 }}>{set.completed ? "✓" : ""}</button>
+        </div>
       ))}
     </div>
   );
@@ -170,7 +194,7 @@ function ExerciseCard({ exercise, weight, onWeightChange, onComplete, equipment 
           {bar && weight > 0 && <PlateLoadingDisplay weight={weight} barWeight={bar.weight} plates={equipment.plates} />}
         </div>
       </div>
-      <SetTracker sets={exercise.sets} reps={exercise.reps} onComplete={(d) => { setDone(d); onComplete(exercise.name, d); }} />
+      <SetTracker sets={exercise.sets} defaultReps={exercise.reps} defaultWeight={weight} onUpdate={(isDone, setsData) => { setDone(isDone); onComplete(exercise.name, isDone, setsData); }} />
       {equipment && weight > 0 && <WarmupSection workingWeight={weight} equipment={equipment} />}
     </div>
   );
@@ -274,9 +298,18 @@ function HistoryView({ history }) {
             <span style={{ color: "#707070", fontSize: 11, fontFamily: "monospace" }}>{new Date(s.date).toLocaleDateString()}</span>
           </div>
           {s.exercises.map((ex) => (
-            <div key={ex.name} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, fontFamily: "monospace", marginBottom: 2 }}>
-              <span style={{ color: "#aaa" }}>{ex.name}</span>
-              <span style={{ color: "#808080" }}>{ex.sets}×{ex.reps} @ {ex.weight}lb</span>
+            <div key={ex.name} style={{ marginBottom: 4 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, fontFamily: "monospace" }}>
+                <span style={{ color: "#aaa" }}>{ex.name}</span>
+                {!ex.setsData?.length && <span style={{ color: "#808080" }}>{ex.sets}×{ex.reps} @ {ex.weight}lb</span>}
+              </div>
+              {ex.setsData?.length > 0 && (
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 3 }}>
+                  {ex.setsData.map((set, si) => (
+                    <span key={si} style={{ fontSize: 10, fontFamily: "monospace", color: "#808080", background: "#252525", borderRadius: 4, padding: "2px 6px" }}>{set.weight}lb×{set.reps}</span>
+                  ))}
+                </div>
+              )}
             </div>
           ))}
         </div>
@@ -344,10 +377,10 @@ export default function App() {
   const day = program[state.currentDayIndex] || program[0];
   const programExercises = day?.exercises || [];
   const activeExercises = isCustomMode ? (state.customWorkout?.exercises || []) : programExercises;
-  const allDone = activeExercises.length > 0 && activeExercises.every((ex) => completedSets[ex.name]);
+  const allDone = activeExercises.length > 0 && activeExercises.every((ex) => completedSets[ex.name]?.done);
 
   const updateWeight = (name, val) => setState((s) => ({ ...s, weights: { ...s.weights, [name]: Math.max(0, val) } }));
-  const markComplete = (name, isDone) => setCompletedSets((p) => ({ ...p, [name]: isDone }));
+  const markComplete = (name, isDone, setsData) => setCompletedSets((p) => ({ ...p, [name]: { done: isDone, sets: setsData } }));
   const finishWorkout = () => {
     if (!isCustomMode && !day) return;
     const exes = isCustomMode ? (state.customWorkout?.exercises || []) : programExercises;
@@ -355,7 +388,13 @@ export default function App() {
       date: Date.now(),
       programName: isCustomMode ? "Custom" : state.activeProgram,
       dayLabel: isCustomMode ? "Custom" : day.label,
-      exercises: exes.map((ex) => ({ name: ex.name, sets: ex.sets, reps: ex.reps, weight: state.weights[ex.name] ?? 0 })),
+      exercises: exes.map((ex) => ({
+        name: ex.name,
+        sets: ex.sets,
+        reps: ex.reps,
+        weight: state.weights[ex.name] ?? 0,
+        setsData: completedSets[ex.name]?.sets || [],
+      })),
     };
     const newWeights = { ...state.weights };
     exes.forEach((ex) => { newWeights[ex.name] = (state.weights[ex.name] ?? 0) + ex.increment; });
