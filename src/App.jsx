@@ -3,9 +3,9 @@ import { useState, useEffect, useRef } from "react";
 const EXERCISE_LIBRARY = [
   { name: "Squat",                defaultSets: 3, defaultReps: 5, increment: 5,   category: "Lower" },
   { name: "Deadlift",             defaultSets: 1, defaultReps: 5, increment: 10,  category: "Lower" },
-  { name: "Bench Press",          defaultSets: 3, defaultReps: 5, increment: 5,   category: "Upper" },
-  { name: "Close-Grip Bench Press", defaultSets: 3, defaultReps: 8, increment: 5, category: "Upper" },
-  { name: "Overhead Press",       defaultSets: 3, defaultReps: 5, increment: 5,   category: "Upper" },
+  { name: "Bench Press",          defaultSets: 3, defaultReps: 5, increment: 2.5, category: "Upper" },
+  { name: "Close-Grip Bench Press", defaultSets: 3, defaultReps: 8, increment: 2.5, category: "Upper" },
+  { name: "Overhead Press",       defaultSets: 3, defaultReps: 5, increment: 2.5, category: "Upper" },
   { name: "Barbell Curl",         defaultSets: 3, defaultReps: 8, increment: 2.5, category: "Upper" },
   { name: "Skull Crusher",        defaultSets: 3, defaultReps: 8, increment: 2.5, category: "Upper" },
   { name: "Chin-Up",              defaultSets: 3, defaultReps: 5, increment: 2.5, category: "Upper" },
@@ -20,12 +20,12 @@ const DEFAULT_PROGRAMS = {
   "Starting Strength": [
     { id: "ss-a", label: "A", exercises: [
       { name: "Squat",       sets: 3, reps: 5, increment: 5  },
-      { name: "Bench Press", sets: 3, reps: 5, increment: 5  },
+      { name: "Bench Press", sets: 3, reps: 5, increment: 2.5 },
       { name: "Deadlift",    sets: 1, reps: 5, increment: 10 },
     ]},
     { id: "ss-b", label: "B", exercises: [
       { name: "Squat",          sets: 3, reps: 5, increment: 5   },
-      { name: "Overhead Press", sets: 3, reps: 5, increment: 5   },
+      { name: "Overhead Press", sets: 3, reps: 5, increment: 2.5 },
       { name: "Chin-Up",        sets: 3, reps: 5, increment: 2.5 },
     ]},
   ],
