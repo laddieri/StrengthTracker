@@ -55,6 +55,52 @@ const WARMUP_PROTOCOL = [
   { pct: 0.7, reps: 2 },
 ];
 
+// Per-exercise overrides for warmup protocol and smallest weight increment.
+// state.exerciseSettings[name] = { increment, warmup: [{ pct, reps }] }
+function defaultIncrementFor(name) {
+  return EXERCISE_LIBRARY.find((e) => e.name === name)?.increment ?? 5;
+}
+
+function getExerciseSettings(state, name) {
+  const stored = state.exerciseSettings?.[name] || {};
+  return {
+    increment: stored.increment ?? defaultIncrementFor(name),
+    warmup: stored.warmup?.length ? stored.warmup : WARMUP_PROTOCOL,
+  };
+}
+
+// Collect every exercise the user has touched (library + programs + history).
+function allExerciseNames(state) {
+  const names = new Set(EXERCISE_LIBRARY.map((e) => e.name));
+  Object.values(state.programs || {}).forEach((days) =>
+    days.forEach((d) => d.exercises.forEach((e) => names.add(e.name)))
+  );
+  (state.history || []).forEach((s) => s.exercises.forEach((e) => names.add(e.name)));
+  return [...names].sort();
+}
+
+// Walk history for an exercise: heaviest single (1-rep PR), best session volume, and per-session log.
+function getExerciseStats(history, name) {
+  let heaviestSingle = null; // { weight, date }
+  let maxVolume = null;      // { volume, date }
+  const sessions = [];
+  (history || []).forEach((s) => {
+    const ex = s.exercises.find((e) => e.name === name);
+    if (!ex) return;
+    const sets = ex.setsData?.length ? ex.setsData : (ex.weight ? [{ weight: ex.weight, reps: ex.reps }] : []);
+    if (!sets.length) return;
+    let volume = 0;
+    sets.forEach((set) => {
+      const w = set.weight || 0, r = set.reps || 0;
+      volume += w * r;
+      if (r === 1 && (!heaviestSingle || w > heaviestSingle.weight)) heaviestSingle = { weight: w, date: s.date };
+    });
+    if (!maxVolume || volume > maxVolume.volume) maxVolume = { volume, date: s.date };
+    sessions.push({ date: s.date, sets, volume });
+  });
+  return { heaviestSingle, maxVolume, sessions: sessions.reverse() };
+}
+
 function calcPlateLoading(targetWeight, barWeight, plates) {
   const perSide = (targetWeight - barWeight) / 2;
   if (perSide < 0) return null;
@@ -69,10 +115,11 @@ function calcPlateLoading(targetWeight, barWeight, plates) {
   return Math.abs(rem) < 0.01 ? result : null;
 }
 
-function calcWarmupSets(workingWeight, barWeight) {
-  return WARMUP_PROTOCOL.map(({ pct, reps }) => ({
+function calcWarmupSets(workingWeight, barWeight, protocol = WARMUP_PROTOCOL, rounding = 2.5) {
+  const unit = rounding > 0 ? rounding : 2.5;
+  return protocol.map(({ pct, reps }) => ({
     pct, reps,
-    weight: Math.max(Math.round(workingWeight * pct / 2.5) * 2.5, barWeight),
+    weight: Math.max(Math.round(workingWeight * pct / unit) * unit, barWeight),
   }));
 }
 
@@ -82,9 +129,9 @@ const STORAGE_KEY = "strengthtracker_state";
 const initialState = () => {
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved) return { equipment: DEFAULT_EQUIPMENT, customWorkout: { exercises: [] }, ...JSON.parse(saved) };
+    if (saved) return { equipment: DEFAULT_EQUIPMENT, customWorkout: { exercises: [] }, exerciseSettings: {}, ...JSON.parse(saved) };
   } catch {}
-  return { weights: { ...DEFAULT_WEIGHTS }, history: [], programs: DEFAULT_PROGRAMS, activeProgram: "Starting Strength", currentDayIndex: 0, equipment: DEFAULT_EQUIPMENT, customWorkout: { exercises: [] } };
+  return { weights: { ...DEFAULT_WEIGHTS }, history: [], programs: DEFAULT_PROGRAMS, activeProgram: "Starting Strength", currentDayIndex: 0, equipment: DEFAULT_EQUIPMENT, customWorkout: { exercises: [] }, exerciseSettings: {} };
 };
 
 function PlateLoadingDisplay({ weight, barWeight, plates }) {
@@ -103,10 +150,10 @@ function PlateLoadingDisplay({ weight, barWeight, plates }) {
   );
 }
 
-function WarmupSection({ workingWeight, equipment }) {
+function WarmupSection({ workingWeight, equipment, protocol, rounding }) {
   const [open, setOpen] = useState(false);
   const bar = equipment.bars.find((b) => b.name === equipment.activeBar) || equipment.bars[0];
-  const sets = calcWarmupSets(workingWeight, bar.weight);
+  const sets = calcWarmupSets(workingWeight, bar.weight, protocol, rounding);
   return (
     <div style={{ marginTop: 10 }}>
       <button onClick={() => setOpen((o) => !o)} style={{ background: "none", border: "1px solid #383838", borderRadius: 4, color: "#808080", cursor: "pointer", fontFamily: "monospace", fontSize: 9, padding: "4px 10px", letterSpacing: 1 }}>
@@ -130,7 +177,7 @@ function WarmupSection({ workingWeight, equipment }) {
   );
 }
 
-function SetTracker({ sets, defaultReps, defaultWeight, onUpdate }) {
+function SetTracker({ sets, defaultReps, defaultWeight, onUpdate, step = 2.5 }) {
   const [setsData, setSetsData] = useState(
     () => Array.from({ length: sets }, () => ({ weight: defaultWeight, reps: defaultReps, completed: false }))
   );
@@ -163,7 +210,7 @@ function SetTracker({ sets, defaultReps, defaultWeight, onUpdate }) {
         <div key={i} style={{ display: "flex", alignItems: "center", gap: 6, background: set.completed ? "rgba(200,245,66,0.06)" : "#1a1a1a", border: `1px solid ${set.completed ? "#c8f542" : "#383838"}`, borderRadius: 8, padding: "7px 10px", transition: "all 0.15s" }}>
           <button onClick={() => removeSet(i)} disabled={!canRemove} style={{ width: 26, height: 26, borderRadius: 4, border: "1px solid #383838", background: "transparent", color: canRemove ? "#909090" : "#383838", cursor: canRemove ? "pointer" : "default", fontSize: 15, flexShrink: 0, lineHeight: 1 }}>−</button>
           <span style={{ color: "#707070", fontFamily: "monospace", fontSize: 10, minWidth: 14, textAlign: "center" }}>{i + 1}</span>
-          <input type="number" value={set.weight} min={0} step={2.5} onChange={(e) => updateField(i, "weight", parseFloat(e.target.value) || 0)} style={{ ...inpStyle, width: 56 }} />
+          <input type="number" value={set.weight} min={0} step={step} onChange={(e) => updateField(i, "weight", parseFloat(e.target.value) || 0)} style={{ ...inpStyle, width: 56 }} />
           <span style={{ color: "#707070", fontFamily: "monospace", fontSize: 10 }}>lb×</span>
           <input type="number" value={set.reps} min={0} onChange={(e) => updateField(i, "reps", parseInt(e.target.value) || 0)} style={{ ...inpStyle, width: 32 }} />
           <span style={{ color: "#707070", fontFamily: "monospace", fontSize: 10, flex: 1 }}>r</span>
@@ -175,35 +222,37 @@ function SetTracker({ sets, defaultReps, defaultWeight, onUpdate }) {
   );
 }
 
-function ExerciseCard({ exercise, weight, onWeightChange, onComplete, equipment }) {
+function ExerciseCard({ exercise, weight, onWeightChange, onComplete, equipment, settings, onOpenDetail }) {
   const [done, setDone] = useState(false);
   const lib = EXERCISE_LIBRARY.find((e) => e.name === exercise.name);
   const catColor = lib ? CATEGORY_COLORS[lib.category] : "#888";
   const bar = equipment?.bars.find((b) => b.name === equipment.activeBar) || equipment?.bars[0];
+  const increment = settings?.increment ?? exercise.increment;
   return (
     <div style={{ background: done ? "rgba(200,245,66,0.04)" : "#1c1c1c", border: `1px solid ${done ? "#c8f542" : "#383838"}`, borderLeft: `3px solid ${done ? "#c8f542" : catColor}`, borderRadius: 10, padding: "18px 20px", transition: "all 0.3s" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
         <div>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <span style={{ fontSize: 17, fontWeight: 700, color: done ? "#c8f542" : "#f0f0f0", letterSpacing: 1 }}>{exercise.name}</span>
+            <button onClick={() => onOpenDetail?.(exercise.name)} style={{ background: "none", border: "none", padding: 0, fontSize: 17, fontWeight: 700, color: done ? "#c8f542" : "#f0f0f0", letterSpacing: 1, cursor: onOpenDetail ? "pointer" : "default", textAlign: "left" }}>{exercise.name}</button>
+            {onOpenDetail && <button onClick={() => onOpenDetail(exercise.name)} title="History & settings" style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, color: "#707070", padding: 0 }}>📊</button>}
             {done && <span style={{ color: "#c8f542" }}>✓</span>}
           </div>
           <div style={{ color: "#808080", fontSize: 11, marginTop: 2, fontFamily: "monospace" }}>{exercise.sets}×{exercise.reps} — +{exercise.increment}lb/session</div>
         </div>
         <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <button onClick={() => onWeightChange(Math.max(0, weight - exercise.increment))} style={{ width: 32, height: 32, borderRadius: 4, border: "1px solid #3c3c3c", background: "#1e1e1e", color: "#aaa", cursor: "pointer", fontSize: 18 }}>−</button>
+            <button onClick={() => onWeightChange(Math.max(0, weight - increment))} style={{ width: 32, height: 32, borderRadius: 4, border: "1px solid #3c3c3c", background: "#1e1e1e", color: "#aaa", cursor: "pointer", fontSize: 18 }}>−</button>
             <div style={{ minWidth: 56, textAlign: "center" }}>
               <div style={{ fontSize: 22, fontWeight: 700, color: "#c8f542" }}>{weight}</div>
               <div style={{ fontSize: 9, color: "#808080", fontFamily: "monospace" }}>LBS</div>
             </div>
-            <button onClick={() => onWeightChange(weight + exercise.increment)} style={{ width: 32, height: 32, borderRadius: 4, border: "1px solid #3c3c3c", background: "#1e1e1e", color: "#aaa", cursor: "pointer", fontSize: 18 }}>+</button>
+            <button onClick={() => onWeightChange(weight + increment)} style={{ width: 32, height: 32, borderRadius: 4, border: "1px solid #3c3c3c", background: "#1e1e1e", color: "#aaa", cursor: "pointer", fontSize: 18 }}>+</button>
           </div>
           {bar && weight > 0 && <PlateLoadingDisplay weight={weight} barWeight={bar.weight} plates={equipment.plates} />}
         </div>
       </div>
-      <SetTracker sets={exercise.sets} defaultReps={exercise.reps} defaultWeight={weight} onUpdate={(isDone, setsData) => { setDone(isDone); onComplete(exercise.name, isDone, setsData); }} />
-      {equipment && weight > 0 && <WarmupSection workingWeight={weight} equipment={equipment} />}
+      <SetTracker sets={exercise.sets} defaultReps={exercise.reps} defaultWeight={weight} step={increment} onUpdate={(isDone, setsData) => { setDone(isDone); onComplete(exercise.name, isDone, setsData); }} />
+      {equipment && weight > 0 && <WarmupSection workingWeight={weight} equipment={equipment} protocol={settings?.warmup} rounding={increment} />}
     </div>
   );
 }
@@ -367,6 +416,124 @@ function EquipmentView({ equipment, onUpdate }) {
   );
 }
 
+function PrCard({ label, value, sub }) {
+  return (
+    <div style={{ flex: 1, background: "#1c1c1c", border: "1px solid #383838", borderRadius: 10, padding: "14px 16px" }}>
+      <div style={{ fontSize: 9, color: "#808080", fontFamily: "monospace", letterSpacing: 1 }}>{label}</div>
+      <div style={{ fontSize: 24, fontWeight: 900, color: value ? "#c8f542" : "#4a4a4a", marginTop: 4 }}>{value || "—"}</div>
+      {sub && <div style={{ fontSize: 9, color: "#707070", fontFamily: "monospace", marginTop: 2 }}>{sub}</div>}
+    </div>
+  );
+}
+
+function ExerciseDetailView({ name, history, settings, onUpdateSettings, onBack }) {
+  const lib = EXERCISE_LIBRARY.find((e) => e.name === name);
+  const catColor = lib ? CATEGORY_COLORS[lib.category] : "#888";
+  const stats = getExerciseStats(history, name);
+  const warmup = settings.warmup;
+
+  const setIncrement = (val) => onUpdateSettings(name, { increment: Math.max(0, val) });
+  const updateWarmupRow = (i, field, val) =>
+    onUpdateSettings(name, { warmup: warmup.map((w, idx) => idx === i ? { ...w, [field]: val } : w) });
+  const addWarmupRow = () => {
+    const last = warmup[warmup.length - 1] || { pct: 0.5, reps: 5 };
+    onUpdateSettings(name, { warmup: [...warmup, { pct: Math.min(1, last.pct + 0.1), reps: last.reps }] });
+  };
+  const removeWarmupRow = (i) => onUpdateSettings(name, { warmup: warmup.filter((_, idx) => idx !== i) });
+  const resetWarmup = () => onUpdateSettings(name, { warmup: WARMUP_PROTOCOL.map((w) => ({ ...w })) });
+
+  const inp = (extra = {}) => ({ background: "#080808", border: "1px solid #3c3c3c", borderRadius: 6, color: "#f0f0f0", fontFamily: "monospace", fontSize: 13, padding: "6px 10px", outline: "none", textAlign: "center", ...extra });
+  const sectionLabel = { fontSize: 10, color: "#808080", fontFamily: "monospace", letterSpacing: 1, marginBottom: 8 };
+
+  return (
+    <div>
+      <button onClick={onBack} style={{ background: "none", border: "1px solid #383838", borderRadius: 5, color: "#909090", cursor: "pointer", padding: "6px 12px", fontFamily: "monospace", fontSize: 10, marginBottom: 14 }}>← BACK</button>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
+        <span style={{ width: 10, height: 10, borderRadius: 3, background: catColor }} />
+        <div style={{ fontSize: 24, fontWeight: 900, letterSpacing: 1 }}>{name}</div>
+      </div>
+      {lib && <div style={{ fontSize: 11, color: "#707070", fontFamily: "monospace", marginBottom: 18 }}>{lib.category.toUpperCase()}</div>}
+
+      {/* PRs */}
+      <div style={sectionLabel}>PERSONAL RECORDS</div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 24 }}>
+        <PrCard
+          label="HEAVIEST SINGLE"
+          value={stats.heaviestSingle ? `${stats.heaviestSingle.weight}lb` : ""}
+          sub={stats.heaviestSingle ? new Date(stats.heaviestSingle.date).toLocaleDateString() : "no 1-rep sets logged"}
+        />
+        <PrCard
+          label="MAX VOLUME"
+          value={stats.maxVolume ? `${stats.maxVolume.volume.toLocaleString()}lb` : ""}
+          sub={stats.maxVolume ? new Date(stats.maxVolume.date).toLocaleDateString() : "no sessions logged"}
+        />
+      </div>
+
+      {/* Settings */}
+      <div style={sectionLabel}>SETTINGS</div>
+      <div style={{ background: "#1c1c1c", border: "1px solid #383838", borderRadius: 10, padding: "16px 18px", marginBottom: 24 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+          <div>
+            <div style={{ fontSize: 12, color: "#d0d0d0", fontWeight: 700 }}>Smallest weight increment</div>
+            <div style={{ fontSize: 10, color: "#707070", fontFamily: "monospace", marginTop: 2 }}>step for +/− buttons & auto-progression</div>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <button onClick={() => setIncrement(Math.round((settings.increment - 1.25) * 100) / 100)} style={{ width: 30, height: 30, borderRadius: 4, border: "1px solid #3c3c3c", background: "#1e1e1e", color: "#aaa", cursor: "pointer", fontSize: 16 }}>−</button>
+            <input type="number" min={0} step={1.25} value={settings.increment} onChange={(e) => setIncrement(parseFloat(e.target.value) || 0)} style={{ ...inp({ width: 64, fontWeight: 700, color: "#c8f542" }) }} />
+            <button onClick={() => setIncrement(Math.round((settings.increment + 1.25) * 100) / 100)} style={{ width: 30, height: 30, borderRadius: 4, border: "1px solid #3c3c3c", background: "#1e1e1e", color: "#aaa", cursor: "pointer", fontSize: 16 }}>+</button>
+          </div>
+        </div>
+
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+          <div style={{ fontSize: 12, color: "#d0d0d0", fontWeight: 700 }}>Warmup sets</div>
+          <button onClick={resetWarmup} style={{ background: "none", border: "1px solid #3c3c3c", borderRadius: 4, color: "#909090", cursor: "pointer", padding: "4px 10px", fontFamily: "monospace", fontSize: 9 }}>RESET</button>
+        </div>
+        <div style={{ display: "flex", gap: 8, padding: "0 4px 6px", fontSize: 9, color: "#707070", fontFamily: "monospace" }}>
+          <span style={{ width: 32 }}>#</span>
+          <span style={{ flex: 1 }}>% OF WORK SET</span>
+          <span style={{ flex: 1 }}>REPS</span>
+          <span style={{ width: 30 }} />
+        </div>
+        {warmup.map((w, i) => (
+          <div key={i} style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 6 }}>
+            <span style={{ width: 32, textAlign: "center", color: "#707070", fontFamily: "monospace", fontSize: 11 }}>{i + 1}</span>
+            <div style={{ flex: 1, display: "flex", alignItems: "center", gap: 4 }}>
+              <input type="number" min={0} max={100} step={5} value={Math.round(w.pct * 100)} onChange={(e) => updateWarmupRow(i, "pct", (parseFloat(e.target.value) || 0) / 100)} style={{ ...inp({ width: "100%" }) }} />
+              <span style={{ color: "#707070", fontFamily: "monospace", fontSize: 11 }}>%</span>
+            </div>
+            <div style={{ flex: 1 }}>
+              <input type="number" min={1} step={1} value={w.reps} onChange={(e) => updateWarmupRow(i, "reps", parseInt(e.target.value) || 0)} style={{ ...inp({ width: "100%" }) }} />
+            </div>
+            <button onClick={() => removeWarmupRow(i)} disabled={warmup.length <= 1} style={{ width: 30, height: 30, borderRadius: 4, border: "1px solid #3c3c3c", background: "#1e1e1e", color: warmup.length <= 1 ? "#3c3c3c" : "#e05252", cursor: warmup.length <= 1 ? "default" : "pointer", fontSize: 13 }}>✕</button>
+          </div>
+        ))}
+        <button onClick={addWarmupRow} style={{ width: "100%", padding: "6px 0", marginTop: 4, background: "transparent", border: "1px dashed #3c3c3c", borderRadius: 6, color: "#808080", cursor: "pointer", fontFamily: "monospace", fontSize: 10, letterSpacing: 1 }}>+ ADD WARMUP SET</button>
+      </div>
+
+      {/* History */}
+      <div style={sectionLabel}>LIFT HISTORY</div>
+      {!stats.sessions.length
+        ? <div style={{ textAlign: "center", color: "#707070", padding: "40px 0", fontFamily: "monospace", fontSize: 12 }}>NO SESSIONS LOGGED YET</div>
+        : <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {stats.sessions.map((s, i) => (
+              <div key={i} style={{ background: "#1c1c1c", border: "1px solid #383838", borderRadius: 10, padding: "12px 16px" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
+                  <span style={{ color: "#c0c0c0", fontFamily: "monospace", fontSize: 11 }}>{new Date(s.date).toLocaleDateString()}</span>
+                  <span style={{ color: "#707070", fontFamily: "monospace", fontSize: 10 }}>vol {s.volume.toLocaleString()}lb</span>
+                </div>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  {s.sets.map((set, si) => (
+                    <span key={si} style={{ fontSize: 11, fontFamily: "monospace", color: "#aaa", background: "#252525", borderRadius: 4, padding: "3px 8px" }}>{set.weight}lb×{set.reps}</span>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+      }
+    </div>
+  );
+}
+
 export default function App() {
   const [state, setState] = useState(initialState);
   const [view, setView] = useState("workout");
@@ -376,6 +543,13 @@ export default function App() {
   const [editingProgram, setEditingProgram] = useState(null);
   const [showPicker, setShowPicker] = useState(false);
   const [isCustomMode, setIsCustomMode] = useState(false);
+  const [selectedExercise, setSelectedExercise] = useState(null);
+
+  const openExerciseDetail = (name) => { setSelectedExercise(name); setView("exercises"); };
+  const updateExerciseSettings = (name, patch) => setState((s) => ({
+    ...s,
+    exerciseSettings: { ...s.exerciseSettings, [name]: { ...getExerciseSettings(s, name), ...patch } },
+  }));
 
   useEffect(() => {
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch {}
@@ -405,7 +579,7 @@ export default function App() {
       })),
     };
     const newWeights = { ...state.weights };
-    exes.forEach((ex) => { newWeights[ex.name] = (state.weights[ex.name] ?? 0) + ex.increment; });
+    exes.forEach((ex) => { newWeights[ex.name] = (state.weights[ex.name] ?? 0) + getExerciseSettings(state, ex.name).increment; });
     setState((s) => ({
       ...s,
       weights: newWeights,
@@ -450,6 +624,7 @@ export default function App() {
         </div>
         <div className="app-nav">
           {nav("Workout", view === "workout", () => setView("workout"))}
+          {nav("Exercises", view === "exercises", () => { setSelectedExercise(null); setView("exercises"); })}
           {nav("History", view === "history", () => setView("history"))}
           {nav("Programs", view === "programs", () => setView("programs"))}
           {nav("Equipment", view === "equipment", () => setView("equipment"))}
@@ -504,7 +679,7 @@ export default function App() {
           {activeExercises.length === 0
             ? <div style={{ textAlign: "center", color: "#707070", padding: "60px 0", fontFamily: "monospace", fontSize: 12 }}>{isCustomMode ? "ADD EXERCISES ABOVE TO BEGIN" : "NO EXERCISES — GO TO PROGRAMS TAB"}</div>
             : <div style={{ display: "flex", flexDirection: "column", gap: 10 }} key={sessionKey}>
-                {activeExercises.map((ex) => <ExerciseCard key={ex.name} exercise={ex} weight={state.weights[ex.name] ?? 0} onWeightChange={(val) => updateWeight(ex.name, val)} onComplete={markComplete} equipment={state.equipment} />)}
+                {activeExercises.map((ex) => <ExerciseCard key={ex.name} exercise={ex} weight={state.weights[ex.name] ?? 0} onWeightChange={(val) => updateWeight(ex.name, val)} onComplete={markComplete} equipment={state.equipment} settings={getExerciseSettings(state, ex.name)} onOpenDetail={openExerciseDetail} />)}
               </div>
           }
           <button onClick={finishWorkout} disabled={!allDone} style={{ width: "100%", marginTop: 16, padding: 15, background: allDone ? "#c8f542" : "#161616", color: allDone ? "#0a0a0a" : "#777", border: `1px solid ${allDone ? "#c8f542" : "#181818"}`, borderRadius: 10, fontWeight: 900, fontSize: 14, letterSpacing: 2, cursor: allDone ? "pointer" : "not-allowed", transition: "all 0.2s" }}>{allDone ? "✓ FINISH & LOG WORKOUT" : "COMPLETE ALL SETS TO FINISH"}</button>
@@ -515,6 +690,29 @@ export default function App() {
           <div style={{ fontSize: 22, fontWeight: 900, letterSpacing: 2, marginBottom: 14 }}>SESSION HISTORY</div>
           <HistoryView history={state.history} />
         </>}
+
+        {view === "exercises" && (
+          selectedExercise
+            ? <ExerciseDetailView name={selectedExercise} history={state.history} settings={getExerciseSettings(state, selectedExercise)} onUpdateSettings={updateExerciseSettings} onBack={() => setSelectedExercise(null)} />
+            : <>
+                <div style={{ fontSize: 22, fontWeight: 900, letterSpacing: 2, marginBottom: 6 }}>EXERCISES</div>
+                <div style={{ fontSize: 11, color: "#707070", fontFamily: "monospace", marginBottom: 16 }}>tap an exercise for history, PRs & settings</div>
+                {allExerciseNames(state).map((exName) => {
+                  const lib = EXERCISE_LIBRARY.find((e) => e.name === exName);
+                  const c = lib ? CATEGORY_COLORS[lib.category] : "#888";
+                  const st = getExerciseStats(state.history, exName);
+                  return (
+                    <button key={exName} onClick={() => setSelectedExercise(exName)} style={{ display: "flex", width: "100%", justifyContent: "space-between", alignItems: "center", background: "#1c1c1c", border: "1px solid #383838", borderLeft: `3px solid ${c}`, borderRadius: 10, padding: "12px 16px", marginBottom: 8, cursor: "pointer", textAlign: "left" }}>
+                      <div>
+                        <div style={{ fontSize: 15, fontWeight: 700, color: "#e0e0e0" }}>{exName}</div>
+                        <div style={{ fontSize: 10, color: "#707070", fontFamily: "monospace", marginTop: 2 }}>{st.sessions.length} session{st.sessions.length !== 1 ? "s" : ""}{st.heaviestSingle ? ` · single ${st.heaviestSingle.weight}lb` : ""}</div>
+                      </div>
+                      <span style={{ color: "#707070", fontSize: 18 }}>›</span>
+                    </button>
+                  );
+                })}
+              </>
+        )}
 
         {view === "equipment" && <EquipmentView equipment={state.equipment} onUpdate={updateEquipment} />}
 
