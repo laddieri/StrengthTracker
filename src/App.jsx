@@ -345,7 +345,7 @@ function WarmupSection({ workingWeight, equipment, protocol, rounding }) {
   );
 }
 
-function SetTracker({ sets, defaultReps, defaultWeight, onUpdate, step = 2.5 }) {
+function SetTracker({ sets, defaultReps, defaultWeight, onUpdate, step = 2.5, allowLightDay = false }) {
   const [setsData, setSetsData] = useState(
     () => Array.from({ length: sets }, () => ({ weight: defaultWeight, reps: defaultReps, completed: false }))
   );
@@ -374,6 +374,12 @@ function SetTracker({ sets, defaultReps, defaultWeight, onUpdate, step = 2.5 }) 
   });
   const removeSet = (i) => setSetsData((prev) => prev.length > 1 ? computeRests(prev.filter((_, idx) => idx !== i)) : prev);
 
+  // Light day: set every work set to 5 reps at 85% of the top weight, rounded
+  // to the exercise's increment.
+  const unit = step > 0 ? step : 2.5;
+  const lightWeight = Math.round((defaultWeight * 0.85) / unit) * unit;
+  const applyLightDay = () => setSetsData((prev) => prev.map((s) => ({ ...s, weight: lightWeight, reps: 5 })));
+
   // Live count-up rest timer: runs from the most recent set completion while
   // there are still sets left to do.
   const lastCompletedAt = setsData.reduce((m, s) => (s.completedAt && s.completedAt > m ? s.completedAt : m), 0);
@@ -396,6 +402,9 @@ function SetTracker({ sets, defaultReps, defaultWeight, onUpdate, step = 2.5 }) 
           <span style={{ color: "#7eb8f7", fontFamily: "monospace", fontSize: 16, fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>{fmtDuration(restElapsed)}</span>
         </div>
       )}
+      {allowLightDay && (
+        <button onClick={applyLightDay} style={{ width: "100%", padding: "6px 0", background: "rgba(126,184,247,0.08)", border: "1px solid #7eb8f7", borderRadius: 6, color: "#7eb8f7", cursor: "pointer", fontFamily: "monospace", fontSize: 10, letterSpacing: 1, fontWeight: 700 }}>☀ LIGHT DAY — 5 × {lightWeight}lb (85%)</button>
+      )}
       {setsData.map((set, i) => (
         <div key={i} style={{ display: "flex", alignItems: "center", gap: 6, background: set.completed ? "rgba(200,245,66,0.06)" : "#1a1a1a", border: `1px solid ${set.completed ? WORK_COLOR : "#383838"}`, borderLeft: `3px solid ${WORK_COLOR}`, borderRadius: 8, padding: "7px 10px", transition: "all 0.15s" }}>
           <button onClick={() => removeSet(i)} disabled={!canRemove} style={{ width: 26, height: 26, borderRadius: 4, border: "1px solid #383838", background: "transparent", color: canRemove ? "#909090" : "#383838", cursor: canRemove ? "pointer" : "default", fontSize: 15, flexShrink: 0, lineHeight: 1 }}>−</button>
@@ -412,7 +421,7 @@ function SetTracker({ sets, defaultReps, defaultWeight, onUpdate, step = 2.5 }) 
   );
 }
 
-function ExerciseCard({ exercise, weight, onWeightChange, onComplete, equipment, settings, onOpenDetail }) {
+function ExerciseCard({ exercise, weight, onWeightChange, onComplete, equipment, settings, onOpenDetail, allowLightDay }) {
   const [done, setDone] = useState(false);
   const lib = EXERCISE_LIBRARY.find((e) => e.name === exercise.name);
   const catColor = lib ? CATEGORY_COLORS[lib.category] : "#888";
@@ -446,7 +455,7 @@ function ExerciseCard({ exercise, weight, onWeightChange, onComplete, equipment,
         </div>
       </div>
       {equipment && weight > 0 && <div style={{ marginTop: 12 }}><WarmupSection workingWeight={weight} equipment={equipment} protocol={settings?.warmup} rounding={increment} /></div>}
-      <SetTracker sets={exercise.sets} defaultReps={exercise.reps} defaultWeight={weight} step={increment} onUpdate={handleUpdate} />
+      <SetTracker sets={exercise.sets} defaultReps={exercise.reps} defaultWeight={weight} step={increment} onUpdate={handleUpdate} allowLightDay={allowLightDay} />
     </div>
   );
 }
@@ -1110,7 +1119,7 @@ export default function App() {
           {activeExercises.length === 0
             ? <div style={{ textAlign: "center", color: "#707070", padding: "60px 0", fontFamily: "monospace", fontSize: 12 }}>{isCustomMode ? "ADD EXERCISES ABOVE TO BEGIN" : "NO EXERCISES — GO TO PROGRAMS TAB"}</div>
             : <div style={{ display: "flex", flexDirection: "column", gap: 10 }} key={sessionKey}>
-                {activeExercises.map((ex) => <ExerciseCard key={ex.name} exercise={ex} weight={state.weights[ex.name] ?? 0} onWeightChange={(val) => updateWeight(ex.name, val)} onComplete={markComplete} equipment={state.equipment} settings={getExerciseSettings(state, ex.name)} onOpenDetail={openExerciseDetail} />)}
+                {activeExercises.map((ex) => <ExerciseCard key={ex.name} exercise={ex} weight={state.weights[ex.name] ?? 0} onWeightChange={(val) => updateWeight(ex.name, val)} onComplete={markComplete} equipment={state.equipment} settings={getExerciseSettings(state, ex.name)} onOpenDetail={openExerciseDetail} allowLightDay={isCustomMode} />)}
               </div>
           }
           <button onClick={finishWorkout} disabled={!allDone} style={{ width: "100%", marginTop: 16, padding: 15, background: allDone ? "#c8f542" : "#161616", color: allDone ? "#0a0a0a" : "#777", border: `1px solid ${allDone ? "#c8f542" : "#181818"}`, borderRadius: 10, fontWeight: 900, fontSize: 14, letterSpacing: 2, cursor: allDone ? "pointer" : "not-allowed", transition: "all 0.2s" }}>{allDone ? "✓ FINISH & LOG WORKOUT" : "COMPLETE ALL SETS TO FINISH"}</button>
