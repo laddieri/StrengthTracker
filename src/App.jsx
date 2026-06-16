@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 
 const EXERCISE_LIBRARY = [
   { name: "Squat",                defaultSets: 3, defaultReps: 5, increment: 5,   category: "Lower" },
@@ -125,6 +125,122 @@ function calcWarmupSets(workingWeight, barWeight, protocol = WARMUP_PROTOCOL, ro
 
 const CATEGORY_COLORS = { Lower: "#7eb8f7", Upper: "#c8f542", Power: "#f7a07e" };
 const uid = () => Math.random().toString(36).slice(2, 9);
+
+// ---- Strong CSV import ----------------------------------------------------
+const KG_TO_LB = 1 / 0.45359237;
+const roundWeight = (lb) => Math.round((Math.round(lb / 0.25) * 0.25) * 100) / 100;
+
+// Map Strong's exercise names onto this app's library where they correspond.
+const STRONG_ALIASES = {
+  "Squat": "Squat",
+  "Bench Press": "Bench Press",
+  "Deadlift": "Deadlift",
+  "Overhead Press": "Overhead Press",
+  "Chin Up": "Chin-Up",
+  "Bicep Curl": "Barbell Curl",
+  "Skullcrusher": "Skull Crusher",
+  "Bench Press - Close Grip": "Close-Grip Bench Press",
+};
+
+function autoMapExerciseName(raw) {
+  const base = raw.replace(/\s*\((?:Barbell|Dumbbell|Machine|Cable|Smith Machine|Bodyweight|Plate Loaded|Weighted)\)\s*$/i, "").trim();
+  return STRONG_ALIASES[base] || base;
+}
+
+// Character-level CSV parser: handles quoted fields, escaped quotes, and
+// newlines inside quotes. Delimiter is configurable (Strong uses ';').
+function parseCSV(text, delim) {
+  const rows = [];
+  let row = [], field = "", inQuotes = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQuotes) {
+      if (c === '"') { if (text[i + 1] === '"') { field += '"'; i++; } else inQuotes = false; }
+      else field += c;
+    } else if (c === '"') inQuotes = true;
+    else if (c === delim) { row.push(field); field = ""; }
+    else if (c === "\n") { row.push(field); rows.push(row); row = []; field = ""; }
+    else if (c !== "\r") field += c;
+  }
+  if (field.length || row.length) { row.push(field); rows.push(row); }
+  return rows;
+}
+
+// Parse a Strong export into a normalized, flat list of rep-based sets.
+function parseStrongCsv(text) {
+  const delim = (text.split("\n")[0].match(/;/g) || []).length >= (text.split("\n")[0].match(/,/g) || []).length ? ";" : ",";
+  const rows = parseCSV(text, delim).filter((r) => r.some((c) => c.trim() !== ""));
+  if (rows.length < 2) throw new Error("File looks empty.");
+  const header = rows[0].map((h) => h.trim().toLowerCase());
+  const col = (pred) => header.findIndex(pred);
+  const idx = {
+    workoutNo: col((h) => h.includes("workout") && h.includes("#")),
+    date: col((h) => h === "date"),
+    workoutName: col((h) => h === "workout name"),
+    exercise: col((h) => h === "exercise name"),
+    setOrder: col((h) => h === "set order"),
+    weight: col((h) => h.includes("weight")),
+    reps: col((h) => h === "reps"),
+  };
+  if (idx.exercise < 0 || idx.reps < 0 || idx.weight < 0) throw new Error("This doesn't look like a Strong export (missing Exercise/Weight/Reps columns).");
+  const weightIsKg = (header[idx.weight] || "").includes("kg");
+
+  const sets = [];
+  const exerciseCounts = {};
+  for (let i = 1; i < rows.length; i++) {
+    const r = rows[i];
+    const order = (r[idx.setOrder] || "").trim();
+    if (order === "Rest Timer" || order === "Note") continue; // metadata rows, not sets
+    const reps = parseInt(r[idx.reps], 10);
+    if (!Number.isFinite(reps) || reps <= 0) continue; // skip cardio / time-only rows
+    const rawWeight = parseFloat(r[idx.weight]) || 0;
+    const setType = order === "W" ? "warmup" : order === "D" ? "drop" : "work";
+    const srcExercise = (r[idx.exercise] || "Unknown").trim();
+    const dateMs = Date.parse((r[idx.date] || "").replace(" ", "T"));
+    sets.push({
+      workoutNo: (r[idx.workoutNo] || "").trim() || String(dateMs),
+      dateMs: Number.isFinite(dateMs) ? dateMs : 0,
+      workoutName: (r[idx.workoutName] || "Workout").trim(),
+      srcExercise,
+      setType,
+      weight: roundWeight(weightIsKg ? rawWeight * KG_TO_LB : rawWeight),
+      reps,
+    });
+    exerciseCounts[srcExercise] = (exerciseCounts[srcExercise] || 0) + 1;
+  }
+  if (!sets.length) throw new Error("No logged sets found in the file.");
+  const dates = sets.map((s) => s.dateMs).filter(Boolean).sort((a, b) => a - b);
+  const workouts = new Set(sets.map((s) => s.workoutNo));
+  return {
+    sets,
+    exerciseCounts,
+    summary: { sets: sets.length, workouts: workouts.size, exercises: Object.keys(exerciseCounts).length, from: dates[0], to: dates[dates.length - 1] },
+  };
+}
+
+// Turn parsed sets + a source→target name mapping into app-format sessions.
+function buildImportSessions(parsed, mapping) {
+  const groups = new Map(); // workoutNo -> { dateMs, workoutName, exercises: Map }
+  for (const s of parsed.sets) {
+    if (!groups.has(s.workoutNo)) groups.set(s.workoutNo, { dateMs: s.dateMs, workoutName: s.workoutName, exercises: new Map() });
+    const g = groups.get(s.workoutNo);
+    const target = (mapping[s.srcExercise] || s.srcExercise).trim();
+    if (!target) continue;
+    if (!g.exercises.has(target)) g.exercises.set(target, []);
+    g.exercises.get(target).push({ weight: s.weight, reps: s.reps, completed: true, _type: s.setType });
+  }
+  const sessions = [];
+  for (const [workoutNo, g] of groups) {
+    const exercises = [...g.exercises].map(([name, items]) => {
+      const work = items.filter((it) => it._type !== "warmup");
+      const ref = (work.length ? work : items).reduce((a, b) => (b.weight > a.weight ? b : a));
+      return { name, sets: items.length, reps: ref.reps, weight: ref.weight, setsData: items.map(({ weight, reps, completed }) => ({ weight, reps, completed })) };
+    });
+    sessions.push({ date: g.dateMs, programName: g.workoutName, dayLabel: "", exercises, imported: true, srcId: `strong:${workoutNo}:${g.dateMs}` });
+  }
+  return sessions.sort((a, b) => a.date - b.date);
+}
+
 const STORAGE_KEY = "strengthtracker_state";
 const initialState = () => {
   try {
@@ -351,7 +467,10 @@ function HistoryView({ history }) {
       {[...history].reverse().map((s, i) => (
         <div key={i} style={{ background: "#1c1c1c", border: "1px solid #383838", borderRadius: 10, padding: "14px 18px" }}>
           <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
-            <span style={{ color: "#c8f542", fontWeight: 700, fontSize: 14 }}>{s.programName} — DAY {s.dayLabel}</span>
+            <span style={{ color: "#c8f542", fontWeight: 700, fontSize: 14 }}>
+              {s.programName}{s.dayLabel ? ` — DAY ${s.dayLabel}` : ""}
+              {s.imported && <span style={{ color: "#707070", fontSize: 9, fontFamily: "monospace", marginLeft: 6, border: "1px solid #383838", borderRadius: 3, padding: "1px 5px" }}>IMPORTED</span>}
+            </span>
             <span style={{ color: "#707070", fontSize: 11, fontFamily: "monospace" }}>{new Date(s.date).toLocaleDateString()}</span>
           </div>
           {s.exercises.map((ex) => (
@@ -534,6 +653,108 @@ function ExerciseDetailView({ name, history, settings, onUpdateSettings, onBack 
   );
 }
 
+function ImportModal({ existingHistory, onConfirm, onClose }) {
+  const [parsed, setParsed] = useState(null);
+  const [mapping, setMapping] = useState({});
+  const [fileName, setFileName] = useState("");
+  const [error, setError] = useState("");
+  const fileRef = useRef(null);
+
+  const handleFile = (file) => {
+    if (!file) return;
+    setFileName(file.name); setError("");
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const p = parseStrongCsv(String(e.target.result));
+        setParsed(p);
+        const m = {};
+        Object.keys(p.exerciseCounts).forEach((src) => { m[src] = autoMapExerciseName(src); });
+        setMapping(m);
+      } catch (err) { setParsed(null); setError(err.message || "Could not parse the file."); }
+    };
+    reader.onerror = () => setError("Could not read the file.");
+    reader.readAsText(file);
+  };
+
+  const existingIds = useMemo(() => new Set((existingHistory || []).filter((s) => s.srcId).map((s) => s.srcId)), [existingHistory]);
+  const result = useMemo(() => {
+    if (!parsed) return null;
+    const all = buildImportSessions(parsed, mapping);
+    const fresh = all.filter((s) => !existingIds.has(s.srcId));
+    const latestWeights = {};
+    fresh.forEach((s) => s.exercises.forEach((ex) => { latestWeights[ex.name] = ex.weight; }));
+    return { fresh, dupes: all.length - fresh.length, latestWeights };
+  }, [parsed, mapping, existingIds]);
+
+  const fmtDate = (ms) => (ms ? new Date(ms).toLocaleDateString() : "—");
+  const inp = { background: "#080808", border: "1px solid #3c3c3c", borderRadius: 6, color: "#f0f0f0", fontFamily: "monospace", fontSize: 12, padding: "6px 9px", outline: "none" };
+  const libNames = EXERCISE_LIBRARY.map((e) => e.name);
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.97)", zIndex: 100, overflowY: "auto" }}>
+      <div style={{ maxWidth: 600, margin: "0 auto", padding: "20px 16px 100px" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+          <div style={{ fontSize: 20, fontWeight: 900, color: "#c8f542", letterSpacing: 2 }}>IMPORT HISTORY</div>
+          <button onClick={onClose} style={{ background: "none", border: "none", color: "#909090", cursor: "pointer", fontSize: 24, padding: "4px 8px" }}>✕</button>
+        </div>
+
+        <div style={{ fontSize: 11, color: "#909090", fontFamily: "monospace", lineHeight: 1.6, marginBottom: 16 }}>
+          Export your history from the Strong app (Settings → Export Data) and select the <span style={{ color: "#c8f542" }}>.csv</span> file. Weights are converted from kg to lb automatically.
+        </div>
+
+        <datalist id="lib-exercises">{libNames.map((n) => <option key={n} value={n} />)}</datalist>
+
+        <input ref={fileRef} type="file" accept=".csv,text/csv" style={{ display: "none" }} onChange={(e) => handleFile(e.target.files?.[0])} />
+        <button onClick={() => fileRef.current?.click()} style={{ width: "100%", padding: 16, background: "transparent", border: "1px dashed #4a4a4a", borderRadius: 8, color: "#c0c0c0", cursor: "pointer", fontFamily: "monospace", fontSize: 12, marginBottom: 14 }}>
+          {fileName ? `📄 ${fileName} — choose a different file` : "📂 CHOOSE STRONG .CSV FILE"}
+        </button>
+
+        {error && <div style={{ background: "rgba(224,82,82,0.1)", border: "1px solid #e05252", borderRadius: 8, padding: "10px 14px", color: "#e05252", fontFamily: "monospace", fontSize: 11, marginBottom: 14 }}>{error}</div>}
+
+        {parsed && result && <>
+          <div style={{ display: "flex", gap: 8, marginBottom: 20, flexWrap: "wrap" }}>
+            {[["WORKOUTS", parsed.summary.workouts], ["SETS", parsed.summary.sets.toLocaleString()], ["EXERCISES", parsed.summary.exercises], ["RANGE", `${fmtDate(parsed.summary.from)} → ${fmtDate(parsed.summary.to)}`]].map(([l, v]) => (
+              <div key={l} style={{ flex: "1 1 120px", background: "#1c1c1c", border: "1px solid #383838", borderRadius: 8, padding: "10px 12px" }}>
+                <div style={{ fontSize: 9, color: "#808080", fontFamily: "monospace", letterSpacing: 1 }}>{l}</div>
+                <div style={{ fontSize: 14, fontWeight: 800, color: "#c8f542", marginTop: 3 }}>{v}</div>
+              </div>
+            ))}
+          </div>
+
+          <div style={{ fontSize: 10, color: "#808080", fontFamily: "monospace", letterSpacing: 1, marginBottom: 6 }}>EXERCISE MAPPING</div>
+          <div style={{ fontSize: 10, color: "#707070", fontFamily: "monospace", marginBottom: 10 }}>edit a name to rename or merge lifts — names matching the library link to its page & settings</div>
+          {Object.keys(parsed.exerciseCounts).sort((a, b) => parsed.exerciseCounts[b] - parsed.exerciseCounts[a]).map((src) => {
+            const mapped = mapping[src];
+            const inLib = libNames.includes(mapped);
+            return (
+              <div key={src} style={{ display: "flex", alignItems: "center", gap: 8, background: "#1a1a1a", border: "1px solid #383838", borderRadius: 8, padding: "8px 10px", marginBottom: 5 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 12, color: "#d0d0d0", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{src}</div>
+                  <div style={{ fontSize: 9, color: "#707070", fontFamily: "monospace" }}>{parsed.exerciseCounts[src]} sets</div>
+                </div>
+                <span style={{ color: "#707070", fontSize: 14 }}>→</span>
+                <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2 }}>
+                  <input list="lib-exercises" value={mapped} onChange={(e) => setMapping((m) => ({ ...m, [src]: e.target.value }))} style={{ ...inp, width: "100%", textAlign: "right" }} />
+                  <span style={{ fontSize: 8, fontFamily: "monospace", color: inLib ? "#c8f542" : "#707070" }}>{inLib ? "✓ library" : "custom"}</span>
+                </div>
+              </div>
+            );
+          })}
+
+          <div style={{ marginTop: 18, fontSize: 11, color: "#909090", fontFamily: "monospace", lineHeight: 1.6 }}>
+            <span style={{ color: "#c8f542", fontWeight: 700 }}>{result.fresh.length}</span> new session{result.fresh.length !== 1 ? "s" : ""} will be added.
+            {result.dupes > 0 && <> <span style={{ color: "#f7a07e" }}>{result.dupes}</span> already imported (skipped).</>}
+          </div>
+          <button onClick={() => onConfirm(result.fresh, result.latestWeights)} disabled={!result.fresh.length} style={{ width: "100%", marginTop: 14, padding: 16, background: result.fresh.length ? "#c8f542" : "#161616", border: "none", borderRadius: 8, color: result.fresh.length ? "#0a0a0a" : "#777", fontWeight: 900, fontSize: 14, letterSpacing: 2, cursor: result.fresh.length ? "pointer" : "not-allowed" }}>
+            {result.fresh.length ? `IMPORT ${result.fresh.length} SESSION${result.fresh.length !== 1 ? "S" : ""}` : "NOTHING NEW TO IMPORT"}
+          </button>
+        </>}
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [state, setState] = useState(initialState);
   const [view, setView] = useState("workout");
@@ -544,6 +765,17 @@ export default function App() {
   const [showPicker, setShowPicker] = useState(false);
   const [isCustomMode, setIsCustomMode] = useState(false);
   const [selectedExercise, setSelectedExercise] = useState(null);
+  const [showImport, setShowImport] = useState(false);
+
+  const importHistory = (sessions, latestWeights) => {
+    setState((s) => ({
+      ...s,
+      history: [...s.history, ...sessions].sort((a, b) => a.date - b.date),
+      weights: { ...s.weights, ...latestWeights },
+    }));
+    setShowImport(false);
+    setView("history");
+  };
 
   const openExerciseDetail = (name) => { setSelectedExercise(name); setView("exercises"); };
   const updateExerciseSettings = (name, patch) => setState((s) => ({
@@ -687,7 +919,10 @@ export default function App() {
         </>}
 
         {view === "history" && <>
-          <div style={{ fontSize: 22, fontWeight: 900, letterSpacing: 2, marginBottom: 14 }}>SESSION HISTORY</div>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+            <div style={{ fontSize: 22, fontWeight: 900, letterSpacing: 2 }}>SESSION HISTORY</div>
+            <button onClick={() => setShowImport(true)} style={{ padding: "8px 14px", background: "#1e1e1e", border: "1px solid #3c3c3c", borderRadius: 6, color: "#c8f542", fontFamily: "monospace", fontSize: 11, fontWeight: 700, cursor: "pointer", letterSpacing: 1 }}>↓ IMPORT</button>
+          </div>
           <HistoryView history={state.history} />
         </>}
 
@@ -762,6 +997,8 @@ export default function App() {
       )}
 
       {showBuilder && <ProgramBuilder programs={state.programs} editingName={editingProgram} onSave={saveProgram} onClose={() => { setShowBuilder(false); setEditingProgram(null); }} />}
+
+      {showImport && <ImportModal existingHistory={state.history} onConfirm={importHistory} onClose={() => setShowImport(false)} />}
     </div>
   );
 }
