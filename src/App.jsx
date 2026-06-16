@@ -975,6 +975,65 @@ function ImportModal({ existingHistory, onConfirm, onClose }) {
   );
 }
 
+const FIREWORK_COLORS = ["#c8f542", "#f48fb1", "#7eb8f7", "#f7a07e", "#ffd54f", "#ffffff"];
+
+function makeFireworkBursts() {
+  return Array.from({ length: 7 }, (_, b) => ({
+    id: b,
+    left: 8 + Math.random() * 84,
+    top: 12 + Math.random() * 50,
+    delay: Math.random() * 2.2,
+    particles: Array.from({ length: 16 }, (_, i) => {
+      const ang = (i / 16) * Math.PI * 2;
+      const dist = 46 + Math.random() * 34;
+      return { tx: Math.cos(ang) * dist, ty: Math.sin(ang) * dist, color: FIREWORK_COLORS[(i + b) % FIREWORK_COLORS.length] };
+    }),
+  }));
+}
+
+// Celebratory overlay shown when a workout sets a new PR. Renders looping CSS
+// firework bursts behind a card listing each new record.
+function PrCelebration({ prs, onClose }) {
+  const [bursts] = useState(makeFireworkBursts);
+
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.9)", zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
+      {bursts.map((burst) => (
+        <div key={burst.id} style={{ position: "absolute", left: `${burst.left}%`, top: `${burst.top}%` }}>
+          {burst.particles.map((p, i) => (
+            <span key={i} className="pr-particle" style={{ background: p.color, "--tx": `${p.tx}px`, "--ty": `${p.ty}px`, animationDelay: `${burst.delay}s` }} />
+          ))}
+        </div>
+      ))}
+
+      <div onClick={(e) => e.stopPropagation()} style={{ position: "relative", zIndex: 1, background: "#141414", border: "2px solid #c8f542", borderRadius: 16, padding: "28px 24px", width: "90%", maxWidth: 420, textAlign: "center", boxShadow: "0 0 40px rgba(200,245,66,0.25)" }}>
+        <div style={{ fontSize: 40, marginBottom: 4 }}>🎆</div>
+        <div style={{ fontSize: 22, fontWeight: 900, letterSpacing: 2, color: "#c8f542" }}>NEW PERSONAL RECORD{prs.length > 1 ? "S" : ""}!</div>
+        <div style={{ fontSize: 11, color: "#808080", fontFamily: "monospace", marginTop: 4, marginBottom: 18 }}>{prs.length} record{prs.length > 1 ? "s" : ""} smashed this workout</div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 20 }}>
+          {prs.map((pr, i) => (
+            <div key={i} style={{ background: "#1c1c1c", border: "1px solid #383838", borderRadius: 10, padding: "12px 16px", textAlign: "left" }}>
+              <div style={{ fontSize: 9, color: "#808080", fontFamily: "monospace", letterSpacing: 1 }}>{pr.type === "single" ? "HEAVIEST SINGLE" : "TOP SET OF 5"}</div>
+              <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginTop: 2 }}>
+                <span style={{ fontSize: 18, fontWeight: 800, color: "#f0f0f0" }}>{pr.name}</span>
+                <span style={{ fontSize: 20, fontWeight: 900, color: "#c8f542" }}>{pr.weight}lb</span>
+              </div>
+              <div style={{ fontSize: 10, color: "#909090", fontFamily: "monospace", marginTop: 4 }}>
+                {pr.prevWeight != null
+                  ? <>↑ {pr.weight - pr.prevWeight > 0 ? `+${Math.round((pr.weight - pr.prevWeight) * 100) / 100}lb over ` : ""}previous {pr.prevWeight}lb · set {new Date(pr.prevDate).toLocaleDateString()}</>
+                  : <span style={{ color: "#c8f542" }}>your first record for this lift! 🎉</span>}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <button onClick={onClose} style={{ width: "100%", padding: 14, background: "#c8f542", border: "none", borderRadius: 10, color: "#0a0a0a", fontWeight: 900, fontSize: 14, letterSpacing: 2, cursor: "pointer" }}>LET'S GO 💪</button>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [state, setState] = useState(initialState);
   const [view, setView] = useState("workout");
@@ -986,6 +1045,7 @@ export default function App() {
   const [isCustomMode, setIsCustomMode] = useState(false);
   const [selectedExercise, setSelectedExercise] = useState(null);
   const [showImport, setShowImport] = useState(false);
+  const [prCelebration, setPrCelebration] = useState(null);
 
   const importHistory = (sessions, latestWeights) => {
     setState((s) => ({
@@ -1033,6 +1093,25 @@ export default function App() {
     };
     const newWeights = { ...state.weights };
     exes.forEach((ex) => { newWeights[ex.name] = (state.weights[ex.name] ?? 0) + getExerciseSettings(state, ex.name).increment; });
+
+    // Detect new PRs (heaviest single-rep set and heaviest 5-rep set) against
+    // the history that existed before logging this session.
+    const prs = [];
+    exes.forEach((ex) => {
+      const sets = completedSets[ex.name]?.sets || [];
+      let newSingle = 0, newFive = 0;
+      sets.forEach((s) => {
+        const w = s.weight || 0, r = s.reps || 0;
+        if (r === 1 && w > newSingle) newSingle = w;
+        if (r === 5 && w > newFive) newFive = w;
+      });
+      const prior = getExerciseStats(state.history, ex.name);
+      if (newSingle > 0 && (!prior.heaviestSingle || newSingle > prior.heaviestSingle.weight))
+        prs.push({ name: ex.name, type: "single", weight: newSingle, prevWeight: prior.heaviestSingle?.weight ?? null, prevDate: prior.heaviestSingle?.date ?? null });
+      if (newFive > 0 && (!prior.topFive || newFive > prior.topFive.weight))
+        prs.push({ name: ex.name, type: "five", weight: newFive, prevWeight: prior.topFive?.weight ?? null, prevDate: prior.topFive?.date ?? null });
+    });
+
     setState((s) => ({
       ...s,
       weights: newWeights,
@@ -1042,6 +1121,7 @@ export default function App() {
     setCompletedSets({}); setSessionKey((k) => k + 1);
     if (isCustomMode) setIsCustomMode(false);
     setView("history");
+    if (prs.length) setPrCelebration(prs);
   };
   const addCustomExercise = (exName) => {
     const lib = exerciseList.find((e) => e.name === exName) || { defaultSets: 3, defaultReps: 5, increment: 5 };
@@ -1221,6 +1301,8 @@ export default function App() {
       {showBuilder && <ProgramBuilder programs={state.programs} editingName={editingProgram} onSave={saveProgram} onClose={() => { setShowBuilder(false); setEditingProgram(null); }} exercises={exerciseList} />}
 
       {showImport && <ImportModal existingHistory={state.history} onConfirm={importHistory} onClose={() => setShowImport(false)} />}
+
+      {prCelebration && <PrCelebration prs={prCelebration} onClose={() => setPrCelebration(null)} />}
     </div>
   );
 }
