@@ -299,24 +299,30 @@ function PlateLoadingDisplay({ weight, barWeight, plates }) {
 }
 
 function WarmupSection({ workingWeight, equipment, protocol, rounding }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(true);
+  const [done, setDone] = useState({});
   const bar = equipment.bars.find((b) => b.name === equipment.activeBar) || equipment.bars[0];
   const sets = calcWarmupSets(workingWeight, bar.weight, protocol, rounding);
+  const toggle = (i) => setDone((d) => ({ ...d, [i]: !d[i] }));
+  const doneCount = sets.filter((_, i) => done[i]).length;
   return (
-    <div style={{ marginTop: 10 }}>
+    <div style={{ marginBottom: 10 }}>
       <button onClick={() => setOpen((o) => !o)} style={{ background: "none", border: "1px solid #383838", borderRadius: 4, color: "#808080", cursor: "pointer", fontFamily: "monospace", fontSize: 9, padding: "4px 10px", letterSpacing: 1 }}>
-        {open ? "▲ WARMUP" : "▼ WARMUP"}
+        {open ? "▲ WARMUP" : "▼ WARMUP"} <span style={{ color: doneCount === sets.length ? "#c8f542" : "#707070" }}>{doneCount}/{sets.length}</span>
       </button>
       {open && (
         <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 4 }}>
           {sets.map(({ pct, reps, weight, barOnly }, i) => (
-            <div key={i} style={{ background: "#1d1d1d", border: "1px solid #383838", borderRadius: 6, padding: "7px 12px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+            <div key={i} style={{ background: done[i] ? "rgba(200,245,66,0.06)" : "#1d1d1d", border: `1px solid ${done[i] ? "#c8f542" : "#383838"}`, borderRadius: 6, padding: "7px 10px 7px 12px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, transition: "all 0.15s" }}>
+              <div style={{ display: "flex", gap: 12, alignItems: "center", minWidth: 0 }}>
                 <span style={{ color: "#808080", fontFamily: "monospace", fontSize: 10, minWidth: 28 }}>{barOnly ? "BAR" : `${Math.round(pct * 100)}%`}</span>
                 <span style={{ color: "#999", fontFamily: "monospace", fontSize: 10 }}>{reps}r</span>
                 <span style={{ color: "#c0c0c0", fontWeight: 700, fontSize: 13 }}>{weight}lb</span>
               </div>
-              <PlateLoadingDisplay weight={weight} barWeight={bar.weight} plates={equipment.plates} />
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <PlateLoadingDisplay weight={weight} barWeight={bar.weight} plates={equipment.plates} />
+                <button onClick={() => toggle(i)} style={{ width: 28, height: 28, borderRadius: 6, border: `2px solid ${done[i] ? "#c8f542" : "#4a4a4a"}`, background: done[i] ? "#c8f542" : "transparent", color: done[i] ? "#0a0a0a" : "#4a4a4a", fontSize: 14, cursor: "pointer", transition: "all 0.15s", flexShrink: 0 }}>{done[i] ? "✓" : ""}</button>
+              </div>
             </div>
           ))}
         </div>
@@ -421,8 +427,8 @@ function ExerciseCard({ exercise, weight, onWeightChange, onComplete, equipment,
           {bar && weight > 0 && <PlateLoadingDisplay weight={weight} barWeight={bar.weight} plates={equipment.plates} />}
         </div>
       </div>
+      {equipment && weight > 0 && <div style={{ marginTop: 12 }}><WarmupSection workingWeight={weight} equipment={equipment} protocol={settings?.warmup} rounding={increment} /></div>}
       <SetTracker sets={exercise.sets} defaultReps={exercise.reps} defaultWeight={weight} step={increment} onUpdate={(isDone, setsData) => { setDone(isDone); onComplete(exercise.name, isDone, setsData); }} />
-      {equipment && weight > 0 && <WarmupSection workingWeight={weight} equipment={equipment} protocol={settings?.warmup} rounding={increment} />}
     </div>
   );
 }
