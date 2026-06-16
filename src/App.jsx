@@ -617,19 +617,25 @@ function PrCard({ label, value, sub }) {
 const chartDay = (ms) => { const d = new Date(ms); return `${d.getMonth() + 1}/${d.getDate()}/${String(d.getFullYear()).slice(2)}`; };
 const CHART_RANGES = [["1M", 30], ["3M", 90], ["6M", 180], ["1Y", 365], ["ALL", null]];
 
-// Line graph of the heaviest weight per session for one exercise. Range
-// buttons zoom the time frame; tapping the plot selects the nearest node.
+// Line graph for one exercise. A metric toggle plots either the heaviest
+// weight per session or the top set by weight × reps. Range buttons zoom the
+// time frame; tapping the plot selects the nearest node.
+const CHART_METRICS = [["weight", "HEAVIEST"], ["volume", "TOP SET (W×R)"]];
 function ExerciseChart({ sessions }) {
+  const [metric, setMetric] = useState("weight");
   const points = useMemo(() => (
     [...sessions].reverse().map((s) => {
       let top = null;
       s.sets.forEach((set) => {
         const w = set.weight || 0, r = set.reps || 0;
-        if (w > 0 && (!top || w > top.weight || (w === top.weight && r > top.reps))) top = { weight: w, reps: r };
+        if (w <= 0) return;
+        const score = metric === "volume" ? w * r : w + r / 1000;
+        if (!top || score > top.score) top = { weight: w, reps: r, score };
       });
-      return top ? { date: s.date, weight: top.weight, reps: top.reps } : null;
+      if (!top) return null;
+      return { date: s.date, weight: top.weight, reps: top.reps, value: metric === "volume" ? top.weight * top.reps : top.weight };
     }).filter(Boolean)
-  ), [sessions]);
+  ), [sessions, metric]);
 
   const [rangeIdx, setRangeIdx] = useState(CHART_RANGES.length - 1);
   const [sel, setSel] = useState(null);
@@ -641,13 +647,13 @@ function ExerciseChart({ sessions }) {
 
   const VBW = 620, VBH = 240, padL = 46, padR = 14, padT = 16, padB = 28;
   const plotW = VBW - padL - padR, plotH = VBH - padT - padB;
-  const weights = data.map((p) => p.weight);
-  const wMin = Math.min(...weights), wMax = Math.max(...weights);
-  const span = wMax - wMin || Math.max(wMax * 0.1, 5);
-  const yMin = wMin - span * 0.15, yMax = wMax + span * 0.15;
+  const values = data.map((p) => p.value);
+  const vMin = Math.min(...values), vMax = Math.max(...values);
+  const span = vMax - vMin || Math.max(vMax * 0.1, 5);
+  const yMin = vMin - span * 0.15, yMax = vMax + span * 0.15;
   const dMin = data.length ? data[0].date : 0, dMax = data.length ? data[data.length - 1].date : 1;
   const xOf = (date) => dMax === dMin ? padL + plotW / 2 : padL + ((date - dMin) / (dMax - dMin)) * plotW;
-  const yOf = (w) => padT + (1 - (w - yMin) / (yMax - yMin)) * plotH;
+  const yOf = (v) => padT + (1 - (v - yMin) / (yMax - yMin)) * plotH;
 
   const selPoint = sel != null ? data[sel] : null;
   const pickNearest = (e) => {
@@ -665,6 +671,11 @@ function ExerciseChart({ sessions }) {
 
   return (
     <div>
+      <div style={{ display: "flex", gap: 5, marginBottom: 8 }}>
+        {CHART_METRICS.map(([m, label]) => (
+          <button key={m} onClick={() => { setMetric(m); setSel(null); }} style={{ flex: 1, padding: "6px 8px", borderRadius: 5, border: `1px solid ${metric === m ? "#c8f542" : "#3c3c3c"}`, background: metric === m ? "rgba(200,245,66,0.1)" : "#1d1d1d", color: metric === m ? "#c8f542" : "#909090", fontFamily: "monospace", fontSize: 10, fontWeight: 700, cursor: "pointer", letterSpacing: 1 }}>{label}</button>
+        ))}
+      </div>
       <div style={{ display: "flex", gap: 5, marginBottom: 10, flexWrap: "wrap" }}>
         {CHART_RANGES.map(([label], i) => (
           <button key={label} onClick={() => { setRangeIdx(i); setSel(null); }} style={{ padding: "5px 11px", borderRadius: 5, border: "none", background: rangeIdx === i ? "#c8f542" : "#1d1d1d", color: rangeIdx === i ? "#0a0a0a" : "#909090", fontFamily: "monospace", fontSize: 10, fontWeight: 700, cursor: "pointer", letterSpacing: 1 }}>{label}</button>
@@ -675,6 +686,7 @@ function ExerciseChart({ sessions }) {
         {selPoint ? <>
           <span style={{ color: "#c8f542", fontWeight: 800, fontSize: 16 }}>{selPoint.weight}lb</span>
           <span style={{ color: "#aaa", fontFamily: "monospace", fontSize: 12 }}>× {selPoint.reps} reps</span>
+          {metric === "volume" && <span style={{ color: "#7eb8f7", fontFamily: "monospace", fontSize: 12 }}>= {selPoint.value.toLocaleString()}lb</span>}
           <span style={{ color: "#707070", fontFamily: "monospace", fontSize: 11, marginLeft: "auto" }}>{new Date(selPoint.date).toLocaleDateString()}</span>
         </> : <span style={{ color: "#707070", fontFamily: "monospace", fontSize: 11 }}>tap a point to see weight, reps & date</span>}
       </div>
@@ -685,16 +697,16 @@ function ExerciseChart({ sessions }) {
             {yTicks.map((t, i) => (
               <g key={i}>
                 <line x1={padL} y1={yOf(t)} x2={VBW - padR} y2={yOf(t)} stroke="#2a2a2a" strokeWidth="1" />
-                <text x={padL - 6} y={yOf(t) + 3} textAnchor="end" fontSize="10" fontFamily="monospace" fill="#707070">{Math.round(t)}</text>
+                <text x={padL - 6} y={yOf(t) + 3} textAnchor="end" fontSize="10" fontFamily="monospace" fill="#707070">{Math.round(t).toLocaleString()}</text>
               </g>
             ))}
             {xTicks.map((t, i) => (
               <text key={i} x={xOf(t)} y={VBH - 10} textAnchor="middle" fontSize="9" fontFamily="monospace" fill="#707070">{chartDay(t)}</text>
             ))}
-            {data.length > 1 && <polyline points={data.map((p) => `${xOf(p.date)},${yOf(p.weight)}`).join(" ")} fill="none" stroke="#c8f542" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />}
+            {data.length > 1 && <polyline points={data.map((p) => `${xOf(p.date)},${yOf(p.value)}`).join(" ")} fill="none" stroke="#c8f542" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />}
             {selPoint && <line x1={xOf(selPoint.date)} y1={padT} x2={xOf(selPoint.date)} y2={padT + plotH} stroke="#c8f542" strokeWidth="1" strokeDasharray="3 3" opacity="0.5" />}
             {data.map((p, i) => (
-              <circle key={i} cx={xOf(p.date)} cy={yOf(p.weight)} r={sel === i ? 5 : (data.length > 60 ? 1.6 : 3)} fill={sel === i ? "#0a0a0a" : "#c8f542"} stroke="#c8f542" strokeWidth={sel === i ? 2.5 : 0} />
+              <circle key={i} cx={xOf(p.date)} cy={yOf(p.value)} r={sel === i ? 5 : (data.length > 60 ? 1.6 : 3)} fill={sel === i ? "#0a0a0a" : "#c8f542"} stroke="#c8f542" strokeWidth={sel === i ? 2.5 : 0} />
             ))}
           </svg>
       }
@@ -745,8 +757,8 @@ function ExerciseDetailView({ name, history, settings, onUpdateSettings, onBack 
         />
       </div>
 
-      {/* Heaviest weight over time */}
-      <div style={sectionLabel}>HEAVIEST WEIGHT OVER TIME</div>
+      {/* Progress over time */}
+      <div style={sectionLabel}>PROGRESS OVER TIME</div>
       <div style={{ marginBottom: 24 }}>
         <ExerciseChart sessions={stats.sessions} />
       </div>
