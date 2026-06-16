@@ -296,6 +296,25 @@ const initialState = () => {
   return { weights: { ...DEFAULT_WEIGHTS }, history: [], programs: DEFAULT_PROGRAMS, activeProgram: "Starting Strength", currentDayIndex: 0, equipment: DEFAULT_EQUIPMENT, customWorkout: { exercises: [] }, exerciseSettings: {} };
 };
 
+// In-progress workout (completed work sets, warmup completion, light-day
+// toggles) is persisted separately so it survives navigation, reloads, and
+// closing the app. Kept apart from the main state to avoid re-serializing the
+// full history on every set edit.
+const ACTIVE_KEY = "strengthtracker_active";
+const emptyActive = () => ({ completedSets: {}, warmupDone: {}, lightDays: {}, isCustomMode: false });
+const loadActive = () => {
+  try {
+    const saved = localStorage.getItem(ACTIVE_KEY);
+    if (saved) return { ...emptyActive(), ...JSON.parse(saved) };
+  } catch { /* ignore */ }
+  return emptyActive();
+};
+// Any completed work set or checked warmup means a workout is in progress.
+const hasActiveProgress = (completedSets, warmupDone) =>
+  Object.values(completedSets || {}).some((c) => c?.sets?.some((s) => s.completed)) ||
+  Object.values(warmupDone || {}).some((d) => Object.values(d || {}).some(Boolean));
+
+
 function PlateLoadingDisplay({ weight, barWeight, plates }) {
   if (weight <= 0) return null;
   if (weight < barWeight) return <span style={{ fontSize: 10, fontFamily: "monospace", color: "#909090" }}>bar only</span>;
@@ -312,9 +331,10 @@ function PlateLoadingDisplay({ weight, barWeight, plates }) {
   );
 }
 
-function WarmupSection({ workingWeight, equipment, protocol, rounding }) {
+function WarmupSection({ workingWeight, equipment, protocol, rounding, initialDone, onDoneChange }) {
   const [open, setOpen] = useState(true);
-  const [done, setDone] = useState({});
+  const [done, setDone] = useState(() => initialDone || {});
+  useEffect(() => { onDoneChange?.(done); }, [done, onDoneChange]);
   const bar = equipment.bars.find((b) => b.name === equipment.activeBar) || equipment.bars[0];
   const sets = calcWarmupSets(workingWeight, bar.weight, protocol, rounding);
   const toggle = (i) => setDone((d) => ({ ...d, [i]: !d[i] }));
@@ -345,9 +365,11 @@ function WarmupSection({ workingWeight, equipment, protocol, rounding }) {
   );
 }
 
-function SetTracker({ sets, defaultReps, defaultWeight, onUpdate, step = 2.5 }) {
+function SetTracker({ sets, defaultReps, defaultWeight, onUpdate, step = 2.5, initialSets }) {
   const [setsData, setSetsData] = useState(
-    () => Array.from({ length: sets }, () => ({ weight: defaultWeight, reps: defaultReps, completed: false }))
+    () => (initialSets && initialSets.length)
+      ? initialSets.map((s) => ({ ...s }))
+      : Array.from({ length: sets }, () => ({ weight: defaultWeight, reps: defaultReps, completed: false }))
   );
   // When the working weight or reps change (e.g. +/- buttons or toggling light
   // day), sync them onto sets that aren't completed yet. Adjusting state during
@@ -418,9 +440,9 @@ function SetTracker({ sets, defaultReps, defaultWeight, onUpdate, step = 2.5 }) 
   );
 }
 
-function ExerciseCard({ exercise, weight, onWeightChange, onComplete, equipment, settings, onOpenDetail, allowLightDay }) {
-  const [done, setDone] = useState(false);
-  const [lightDay, setLightDay] = useState(false);
+function ExerciseCard({ exercise, weight, onWeightChange, onComplete, equipment, settings, onOpenDetail, allowLightDay, lightDay, onLightDayToggle, initialSets, warmupDone, onWarmupDone }) {
+  const initialDone = !!(initialSets && initialSets.length && initialSets.every((s) => s.completed));
+  const [done, setDone] = useState(initialDone);
   const lib = EXERCISE_LIBRARY.find((e) => e.name === exercise.name);
   const catColor = lib ? CATEGORY_COLORS[lib.category] : "#888";
   const bar = equipment?.bars.find((b) => b.name === equipment.activeBar) || equipment?.bars[0];
@@ -429,6 +451,7 @@ function ExerciseCard({ exercise, weight, onWeightChange, onComplete, equipment,
     setDone(isDone);
     onComplete(exercise.name, isDone, setsData);
   }, [onComplete, exercise.name]);
+  const handleWarmupDone = useCallback((d) => onWarmupDone(exercise.name, d), [onWarmupDone, exercise.name]);
 
   // Light day: 85% of the top weight, rounded to the exercise's increment, at 5
   // reps — applied to both the work sets and the warmup calculation.
@@ -440,7 +463,7 @@ function ExerciseCard({ exercise, weight, onWeightChange, onComplete, equipment,
   return (
     <div style={{ background: done ? "rgba(200,245,66,0.04)" : "#1c1c1c", border: `1px solid ${done ? "#c8f542" : on ? "#7eb8f7" : "#383838"}`, borderLeft: `3px solid ${done ? "#c8f542" : catColor}`, borderRadius: 10, padding: "18px 20px", transition: "all 0.3s" }}>
       {allowLightDay && (
-        <button onClick={() => setLightDay((v) => !v)} style={{ width: "100%", marginBottom: 14, padding: "7px 12px", borderRadius: 6, border: `1px solid ${on ? "#7eb8f7" : "#3c3c3c"}`, background: on ? "rgba(126,184,247,0.12)" : "transparent", color: on ? "#7eb8f7" : "#909090", cursor: "pointer", fontFamily: "monospace", fontSize: 10, fontWeight: 700, letterSpacing: 1, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <button onClick={() => onLightDayToggle(exercise.name, !lightDay)} style={{ width: "100%", marginBottom: 14, padding: "7px 12px", borderRadius: 6, border: `1px solid ${on ? "#7eb8f7" : "#3c3c3c"}`, background: on ? "rgba(126,184,247,0.12)" : "transparent", color: on ? "#7eb8f7" : "#909090", cursor: "pointer", fontFamily: "monospace", fontSize: 10, fontWeight: 700, letterSpacing: 1, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <span>☀ LIGHT DAY {on ? "ON" : "OFF"}</span>
           <span style={{ color: on ? "#7eb8f7" : "#707070" }}>{on ? `5 × ${lightWeight}lb · 85%` : "tap to enable"}</span>
         </button>
@@ -466,8 +489,8 @@ function ExerciseCard({ exercise, weight, onWeightChange, onComplete, equipment,
           {bar && weight > 0 && <PlateLoadingDisplay weight={weight} barWeight={bar.weight} plates={equipment.plates} />}
         </div>
       </div>
-      {equipment && effWeight > 0 && <div style={{ marginTop: 12 }}><WarmupSection key={on ? "light" : "full"} workingWeight={effWeight} equipment={equipment} protocol={settings?.warmup} rounding={increment} /></div>}
-      <SetTracker sets={exercise.sets} defaultReps={effReps} defaultWeight={effWeight} step={increment} onUpdate={handleUpdate} />
+      {equipment && effWeight > 0 && <div style={{ marginTop: 12 }}><WarmupSection key={on ? "light" : "full"} workingWeight={effWeight} equipment={equipment} protocol={settings?.warmup} rounding={increment} initialDone={warmupDone} onDoneChange={handleWarmupDone} /></div>}
+      <SetTracker sets={exercise.sets} defaultReps={effReps} defaultWeight={effWeight} step={increment} onUpdate={handleUpdate} initialSets={initialSets} />
     </div>
   );
 }
@@ -1037,12 +1060,15 @@ function PrCelebration({ prs, onClose }) {
 export default function App() {
   const [state, setState] = useState(initialState);
   const [view, setView] = useState("workout");
-  const [completedSets, setCompletedSets] = useState({});
+  const [initActive] = useState(loadActive);
+  const [completedSets, setCompletedSets] = useState(initActive.completedSets);
+  const [warmupDone, setWarmupDone] = useState(initActive.warmupDone);
+  const [lightDays, setLightDays] = useState(initActive.lightDays);
   const [sessionKey, setSessionKey] = useState(0);
   const [showBuilder, setShowBuilder] = useState(false);
   const [editingProgram, setEditingProgram] = useState(null);
   const [showPicker, setShowPicker] = useState(false);
-  const [isCustomMode, setIsCustomMode] = useState(false);
+  const [isCustomMode, setIsCustomMode] = useState(initActive.isCustomMode);
   const [selectedExercise, setSelectedExercise] = useState(null);
   const [showImport, setShowImport] = useState(false);
   const [prCelebration, setPrCelebration] = useState(null);
@@ -1066,6 +1092,30 @@ export default function App() {
   useEffect(() => {
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch { /* ignore quota / unavailable storage */ }
   }, [state]);
+
+  // Persist the in-progress workout so completed sets survive navigation/reload.
+  useEffect(() => {
+    try { localStorage.setItem(ACTIVE_KEY, JSON.stringify({ completedSets, warmupDone, lightDays, isCustomMode })); } catch { /* ignore */ }
+  }, [completedSets, warmupDone, lightDays, isCustomMode]);
+
+  // Warn before closing/reloading the tab while a workout is in progress.
+  const workoutInProgress = hasActiveProgress(completedSets, warmupDone);
+  useEffect(() => {
+    if (!workoutInProgress) return;
+    const handler = (e) => { e.preventDefault(); e.returnValue = "Are you sure you want to discard the completed sets?"; return e.returnValue; };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [workoutInProgress]);
+
+  // Reset all in-progress workout state (used when switching/finishing).
+  const resetActiveWorkout = useCallback(() => {
+    setCompletedSets({}); setWarmupDone({}); setLightDays({}); setSessionKey((k) => k + 1);
+  }, []);
+  const toggleLightDay = useCallback((name, value) => {
+    setLightDays((p) => ({ ...p, [name]: value }));
+    setWarmupDone((p) => ({ ...p, [name]: {} })); // warmup weights change, so reset its checkmarks
+  }, []);
+  const setWarmup = useCallback((name, d) => setWarmupDone((p) => (p[name] === d ? p : { ...p, [name]: d })), []);
 
   const exerciseList = useMemo(() => buildExerciseList(state), [state]);
   const program = state.programs[state.activeProgram] || [];
@@ -1118,7 +1168,7 @@ export default function App() {
       history: [...s.history, session],
       ...(isCustomMode ? { customWorkout: { exercises: [] } } : { currentDayIndex: (state.currentDayIndex + 1) % program.length }),
     }));
-    setCompletedSets({}); setSessionKey((k) => k + 1);
+    resetActiveWorkout();
     if (isCustomMode) setIsCustomMode(false);
     setView("history");
     if (prs.length) setPrCelebration(prs);
@@ -1141,9 +1191,9 @@ export default function App() {
       return { ...s, customWorkout: { exercises: exes } };
     });
   };
-  const saveProgram = (name, days) => { setState((s) => ({ ...s, programs: { ...s.programs, [name]: days }, activeProgram: name, currentDayIndex: 0 })); setShowBuilder(false); setEditingProgram(null); setCompletedSets({}); setSessionKey((k) => k + 1); };
+  const saveProgram = (name, days) => { setState((s) => ({ ...s, programs: { ...s.programs, [name]: days }, activeProgram: name, currentDayIndex: 0 })); setShowBuilder(false); setEditingProgram(null); resetActiveWorkout(); };
   const deleteProgram = (pname) => { if (!confirm(`Delete "${pname}"?`)) return; setState((s) => { const { [pname]: _, ...rest } = s.programs; return { ...s, programs: rest, activeProgram: Object.keys(rest)[0] || null, currentDayIndex: 0 }; }); };
-  const selectProgram = (pname) => { setState((s) => ({ ...s, activeProgram: pname, currentDayIndex: 0 })); setCompletedSets({}); setSessionKey((k) => k + 1); setShowPicker(false); };
+  const selectProgram = (pname) => { setState((s) => ({ ...s, activeProgram: pname, currentDayIndex: 0 })); resetActiveWorkout(); setShowPicker(false); };
   const updateEquipment = (eq) => setState((s) => ({ ...s, equipment: eq }));
   const nav = (label, active, onClick) => <button onClick={onClick} style={{ padding: "7px 13px", borderRadius: 6, border: "none", background: active ? "#c8f542" : "#1d1d1d", color: active ? "#0a0a0a" : "#909090", fontFamily: "monospace", fontSize: 11, fontWeight: 700, cursor: "pointer", textTransform: "uppercase", letterSpacing: 1 }}>{label}</button>;
 
@@ -1169,7 +1219,7 @@ export default function App() {
             <div style={{ background: "#181818", border: "1px solid #383838", borderRadius: 10, padding: "12px 16px", marginBottom: 14 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
                 <div style={{ fontSize: 13, fontWeight: 800, letterSpacing: 2, color: "#c8f542" }}>CUSTOM WORKOUT</div>
-                <button onClick={() => { setIsCustomMode(false); setCompletedSets({}); setSessionKey((k) => k + 1); }} style={{ background: "none", border: "1px solid #383838", borderRadius: 5, color: "#909090", cursor: "pointer", padding: "5px 10px", fontFamily: "monospace", fontSize: 10 }}>← PROGRAM</button>
+                <button onClick={() => { setIsCustomMode(false); resetActiveWorkout(); }} style={{ background: "none", border: "1px solid #383838", borderRadius: 5, color: "#909090", cursor: "pointer", padding: "5px 10px", fontFamily: "monospace", fontSize: 10 }}>← PROGRAM</button>
               </div>
               {(state.customWorkout?.exercises || []).map((ex, idx) => {
                 const lib = exerciseList.find((e) => e.name === ex.name);
@@ -1195,14 +1245,14 @@ export default function App() {
                   <div style={{ fontSize: 17, fontWeight: 800, color: "#e0e0e0" }}>{state.activeProgram || "—"}</div>
                 </div>
                 <div style={{ display: "flex", gap: 6 }}>
-                  <button onClick={() => { setIsCustomMode(true); setCompletedSets({}); setSessionKey((k) => k + 1); }} style={{ background: "none", border: "1px solid #383838", borderRadius: 5, color: "#909090", cursor: "pointer", padding: "6px 12px", fontFamily: "monospace", fontSize: 10 }}>CUSTOM</button>
+                  <button onClick={() => { setIsCustomMode(true); resetActiveWorkout(); }} style={{ background: "none", border: "1px solid #383838", borderRadius: 5, color: "#909090", cursor: "pointer", padding: "6px 12px", fontFamily: "monospace", fontSize: 10 }}>CUSTOM</button>
                   <button onClick={() => setShowPicker(true)} style={{ background: "none", border: "1px solid #383838", borderRadius: 5, color: "#909090", cursor: "pointer", padding: "6px 12px", fontFamily: "monospace", fontSize: 10 }}>SWITCH</button>
                 </div>
               </div>
               {program.length > 1 && (
                 <div style={{ display: "flex", gap: 5, marginTop: 10 }}>
                   {program.map((d, i) => (
-                    <button key={d.id} onClick={() => { setState((s) => ({ ...s, currentDayIndex: i })); setCompletedSets({}); setSessionKey((k) => k + 1); }} style={{ padding: "5px 16px", borderRadius: 5, border: "none", background: state.currentDayIndex === i ? "#c8f542" : "#181818", color: state.currentDayIndex === i ? "#0a0a0a" : "#808080", fontWeight: 700, fontSize: 13, cursor: "pointer" }}>DAY {d.label}</button>
+                    <button key={d.id} onClick={() => { setState((s) => ({ ...s, currentDayIndex: i })); resetActiveWorkout(); }} style={{ padding: "5px 16px", borderRadius: 5, border: "none", background: state.currentDayIndex === i ? "#c8f542" : "#181818", color: state.currentDayIndex === i ? "#0a0a0a" : "#808080", fontWeight: 700, fontSize: 13, cursor: "pointer" }}>DAY {d.label}</button>
                   ))}
                 </div>
               )}
@@ -1211,7 +1261,7 @@ export default function App() {
           {activeExercises.length === 0
             ? <div style={{ textAlign: "center", color: "#707070", padding: "60px 0", fontFamily: "monospace", fontSize: 12 }}>{isCustomMode ? "ADD EXERCISES ABOVE TO BEGIN" : "NO EXERCISES — GO TO PROGRAMS TAB"}</div>
             : <div style={{ display: "flex", flexDirection: "column", gap: 10 }} key={sessionKey}>
-                {activeExercises.map((ex) => <ExerciseCard key={ex.name} exercise={ex} weight={state.weights[ex.name] ?? 0} onWeightChange={(val) => updateWeight(ex.name, val)} onComplete={markComplete} equipment={state.equipment} settings={getExerciseSettings(state, ex.name)} onOpenDetail={openExerciseDetail} allowLightDay={isCustomMode} />)}
+                {activeExercises.map((ex) => <ExerciseCard key={ex.name} exercise={ex} weight={state.weights[ex.name] ?? 0} onWeightChange={(val) => updateWeight(ex.name, val)} onComplete={markComplete} equipment={state.equipment} settings={getExerciseSettings(state, ex.name)} onOpenDetail={openExerciseDetail} allowLightDay={isCustomMode} lightDay={!!lightDays[ex.name]} onLightDayToggle={toggleLightDay} initialSets={completedSets[ex.name]?.sets} warmupDone={warmupDone[ex.name]} onWarmupDone={setWarmup} />)}
               </div>
           }
           <button onClick={finishWorkout} disabled={!allDone} style={{ width: "100%", marginTop: 16, padding: 15, background: allDone ? "#c8f542" : "#161616", color: allDone ? "#0a0a0a" : "#777", border: `1px solid ${allDone ? "#c8f542" : "#181818"}`, borderRadius: 10, fontWeight: 900, fontSize: 14, letterSpacing: 2, cursor: allDone ? "pointer" : "not-allowed", transition: "all 0.2s" }}>{allDone ? "✓ FINISH & LOG WORKOUT" : "COMPLETE ALL SETS TO FINISH"}</button>
