@@ -100,7 +100,7 @@ function buildExerciseList(state) {
 // Walk history for an exercise: heaviest single (1-rep PR), best session volume, and per-session log.
 function getExerciseStats(history, name) {
   let heaviestSingle = null; // { weight, date }
-  let maxVolume = null;      // { volume, date }
+  let maxVolume = null;      // best single set by reps×weight: { reps, weight, volume, date }
   const sessions = [];
   (history || []).forEach((s) => {
     const ex = s.exercises.find((e) => e.name === name);
@@ -110,10 +110,11 @@ function getExerciseStats(history, name) {
     let volume = 0;
     sets.forEach((set) => {
       const w = set.weight || 0, r = set.reps || 0;
-      volume += w * r;
+      const vol = w * r;
+      volume += vol;
       if (r === 1 && (!heaviestSingle || w > heaviestSingle.weight)) heaviestSingle = { weight: w, date: s.date };
+      if (vol > 0 && (!maxVolume || vol > maxVolume.volume)) maxVolume = { reps: r, weight: w, volume: vol, date: s.date };
     });
-    if (!maxVolume || volume > maxVolume.volume) maxVolume = { volume, date: s.date };
     sessions.push({ date: s.date, sets, volume });
   });
   return { heaviestSingle, maxVolume, sessions: sessions.reverse() };
@@ -648,8 +649,8 @@ function ExerciseDetailView({ name, history, settings, onUpdateSettings, onBack 
         />
         <PrCard
           label="MAX VOLUME"
-          value={stats.maxVolume ? `${stats.maxVolume.volume.toLocaleString()}lb` : ""}
-          sub={stats.maxVolume ? new Date(stats.maxVolume.date).toLocaleDateString() : "no sessions logged"}
+          value={stats.maxVolume ? `${stats.maxVolume.reps} × ${stats.maxVolume.weight}lb` : ""}
+          sub={stats.maxVolume ? new Date(stats.maxVolume.date).toLocaleDateString() : "no sets logged"}
         />
       </div>
 
