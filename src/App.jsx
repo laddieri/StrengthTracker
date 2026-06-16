@@ -79,6 +79,24 @@ function allExerciseNames(state) {
   return [...names].sort();
 }
 
+// Full set of selectable exercises for the picker: the built-in library plus
+// any exercise that appears in saved programs or imported/logged history.
+// Non-library exercises get sensible defaults (reps inferred from history).
+function buildExerciseList(state) {
+  const byName = new Map();
+  EXERCISE_LIBRARY.forEach((e) => byName.set(e.name, { ...e }));
+  allExerciseNames(state).forEach((name) => {
+    if (byName.has(name)) return;
+    let defaultSets = 3, defaultReps = 5;
+    for (let i = (state.history || []).length - 1; i >= 0; i--) {
+      const ex = state.history[i].exercises.find((e) => e.name === name);
+      if (ex) { defaultReps = ex.reps || defaultReps; break; }
+    }
+    byName.set(name, { name, category: null, defaultSets, defaultReps, increment: getExerciseSettings(state, name).increment });
+  });
+  return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+
 // Walk history for an exercise: heaviest single (1-rep PR), best session volume, and per-session log.
 function getExerciseStats(history, name) {
   let heaviestSingle = null; // { weight, date }
@@ -409,34 +427,39 @@ function ExerciseCard({ exercise, weight, onWeightChange, onComplete, equipment,
   );
 }
 
-function ExercisePicker({ usedNames, onAdd }) {
+function ExercisePicker({ usedNames, onAdd, exercises = EXERCISE_LIBRARY }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
-  const filtered = EXERCISE_LIBRARY.filter((e) => !usedNames.includes(e.name) && e.name.toLowerCase().includes(search.toLowerCase()));
+  const q = search.trim().toLowerCase();
+  const filtered = exercises.filter((e) => !usedNames.includes(e.name) && e.name.toLowerCase().includes(q));
+  const exactMatch = exercises.some((e) => e.name.toLowerCase() === q) || usedNames.some((n) => n.toLowerCase() === q);
   const inp = { background: "#1d1d1d", border: "1px solid #3c3c3c", borderRadius: 6, color: "#f0f0f0", fontFamily: "monospace", fontSize: 12, padding: "7px 10px", outline: "none" };
+  const add = (name) => { onAdd(name); setOpen(false); setSearch(""); };
   if (!open) return <button onClick={() => setOpen(true)} style={{ width: "100%", marginTop: 8, padding: 10, background: "transparent", border: "1px dashed #3c3c3c", borderRadius: 6, color: "#808080", cursor: "pointer", fontFamily: "monospace", fontSize: 11 }}>+ ADD EXERCISE</button>;
   return (
     <div style={{ marginTop: 8 }}>
-      <input autoFocus value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search exercises..." style={{ ...inp, width: "100%", marginBottom: 6 }} />
+      <input autoFocus value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search or type a new exercise..." style={{ ...inp, width: "100%", marginBottom: 6 }} />
       <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
-        {filtered.map((ex) => (
-          <button key={ex.name} onClick={() => { onAdd(ex.name); setOpen(false); setSearch(""); }} style={{ padding: "6px 12px", borderRadius: 5, border: `1px solid ${CATEGORY_COLORS[ex.category]}44`, background: `${CATEGORY_COLORS[ex.category]}11`, color: CATEGORY_COLORS[ex.category], fontFamily: "monospace", fontSize: 12, cursor: "pointer" }}>{ex.name}</button>
-        ))}
-        {!filtered.length && <span style={{ color: "#707070", fontSize: 12, fontFamily: "monospace" }}>No exercises found</span>}
+        {filtered.map((ex) => {
+          const c = CATEGORY_COLORS[ex.category] || "#9a9a9a";
+          return <button key={ex.name} onClick={() => add(ex.name)} style={{ padding: "6px 12px", borderRadius: 5, border: `1px solid ${c}44`, background: `${c}11`, color: c, fontFamily: "monospace", fontSize: 12, cursor: "pointer" }}>{ex.name}</button>;
+        })}
+        {q && !exactMatch && <button onClick={() => add(search.trim())} style={{ padding: "6px 12px", borderRadius: 5, border: "1px dashed #c8f542", background: "rgba(200,245,66,0.08)", color: "#c8f542", fontFamily: "monospace", fontSize: 12, cursor: "pointer" }}>+ create “{search.trim()}”</button>}
+        {!filtered.length && !q && <span style={{ color: "#707070", fontSize: 12, fontFamily: "monospace" }}>No exercises found</span>}
       </div>
       <button onClick={() => setOpen(false)} style={{ marginTop: 6, background: "none", border: "none", color: "#707070", cursor: "pointer", fontSize: 11, fontFamily: "monospace" }}>cancel</button>
     </div>
   );
 }
 
-function ProgramBuilder({ programs, editingName, onSave, onClose }) {
+function ProgramBuilder({ programs, editingName, onSave, onClose, exercises = EXERCISE_LIBRARY }) {
   const existing = editingName && programs[editingName];
   const [name, setName] = useState(editingName || "");
   const [days, setDays] = useState(() => existing ? JSON.parse(JSON.stringify(existing)) : [{ id: uid(), label: "A", exercises: [] }]);
   const addDay = () => setDays((d) => [...d, { id: uid(), label: String.fromCharCode(65 + d.length), exercises: [] }]);
   const removeDay = (id) => setDays((d) => d.filter((x) => x.id !== id));
   const updateLabel = (id, label) => setDays((d) => d.map((x) => x.id === id ? { ...x, label: label.slice(0, 3).toUpperCase() } : x));
-  const addExercise = (dayId, exName) => { const lib = EXERCISE_LIBRARY.find((e) => e.name === exName); if (!lib) return; setDays((d) => d.map((day) => day.id !== dayId ? day : { ...day, exercises: [...day.exercises, { name: exName, sets: lib.defaultSets, reps: lib.defaultReps, increment: lib.increment }] })); };
+  const addExercise = (dayId, exName) => { const lib = exercises.find((e) => e.name === exName) || { defaultSets: 3, defaultReps: 5, increment: 5 }; setDays((d) => d.map((day) => day.id !== dayId ? day : { ...day, exercises: [...day.exercises, { name: exName, sets: lib.defaultSets, reps: lib.defaultReps, increment: lib.increment }] })); };
   const removeExercise = (dayId, exName) => setDays((d) => d.map((day) => day.id !== dayId ? day : { ...day, exercises: day.exercises.filter((e) => e.name !== exName) }));
   const updateField = (dayId, exName, field, val) => setDays((d) => d.map((day) => day.id !== dayId ? day : { ...day, exercises: day.exercises.map((e) => e.name !== exName ? e : { ...e, [field]: val }) }));
   const moveEx = (dayId, exName, dir) => setDays((d) => d.map((day) => { if (day.id !== dayId) return day; const exes = [...day.exercises]; const idx = exes.findIndex((e) => e.name === exName); const next = idx + dir; if (next < 0 || next >= exes.length) return day; [exes[idx], exes[next]] = [exes[next], exes[idx]]; return { ...day, exercises: exes }; }));
@@ -463,8 +486,8 @@ function ProgramBuilder({ programs, editingName, onSave, onClose }) {
               {days.length > 1 && <button onClick={() => removeDay(day.id)} style={{ background: "none", border: "1px solid #3c3c3c", borderRadius: 4, color: "#909090", cursor: "pointer", padding: "5px 10px", fontFamily: "monospace", fontSize: 10 }}>REMOVE</button>}
             </div>
             {day.exercises.map((ex, exIdx) => {
-              const lib = EXERCISE_LIBRARY.find((e) => e.name === ex.name);
-              const c = lib ? CATEGORY_COLORS[lib.category] : "#888";
+              const lib = exercises.find((e) => e.name === ex.name);
+              const c = (lib && CATEGORY_COLORS[lib.category]) || "#9a9a9a";
               return (
                 <div key={ex.name} style={{ background: "#1a1a1a", border: "1px solid #383838", borderLeft: `3px solid ${c}`, borderRadius: 6, padding: "10px 12px", marginBottom: 6 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -486,7 +509,7 @@ function ProgramBuilder({ programs, editingName, onSave, onClose }) {
                 </div>
               );
             })}
-            <ExercisePicker usedNames={day.exercises.map((e) => e.name)} onAdd={(n) => addExercise(day.id, n)} />
+            <ExercisePicker usedNames={day.exercises.map((e) => e.name)} onAdd={(n) => addExercise(day.id, n)} exercises={exercises} />
           </div>
         ))}
         <button onClick={addDay} style={{ width: "100%", padding: 12, background: "transparent", border: "1px dashed #3c3c3c", borderRadius: 8, color: "#808080", cursor: "pointer", fontFamily: "monospace", fontSize: 11, marginBottom: 12 }}>+ ADD DAY</button>
@@ -827,6 +850,7 @@ export default function App() {
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch {}
   }, [state]);
 
+  const exerciseList = useMemo(() => buildExerciseList(state), [state]);
   const program = state.programs[state.activeProgram] || [];
   const day = program[state.currentDayIndex] || program[0];
   const programExercises = day?.exercises || [];
@@ -863,8 +887,7 @@ export default function App() {
     setView("history");
   };
   const addCustomExercise = (exName) => {
-    const lib = EXERCISE_LIBRARY.find((e) => e.name === exName);
-    if (!lib) return;
+    const lib = exerciseList.find((e) => e.name === exName) || { defaultSets: 3, defaultReps: 5, increment: 5 };
     setState((s) => ({ ...s, customWorkout: { exercises: [...(s.customWorkout?.exercises || []), { name: exName, sets: lib.defaultSets, reps: lib.defaultReps, increment: lib.increment }] } }));
   };
   const removeCustomExercise = (exName) => {
@@ -912,8 +935,8 @@ export default function App() {
                 <button onClick={() => { setIsCustomMode(false); setCompletedSets({}); setSessionKey((k) => k + 1); }} style={{ background: "none", border: "1px solid #383838", borderRadius: 5, color: "#909090", cursor: "pointer", padding: "5px 10px", fontFamily: "monospace", fontSize: 10 }}>← PROGRAM</button>
               </div>
               {(state.customWorkout?.exercises || []).map((ex, idx) => {
-                const lib = EXERCISE_LIBRARY.find((e) => e.name === ex.name);
-                const c = lib ? CATEGORY_COLORS[lib.category] : "#888";
+                const lib = exerciseList.find((e) => e.name === ex.name);
+                const c = (lib && CATEGORY_COLORS[lib.category]) || "#9a9a9a";
                 const last = idx === (state.customWorkout?.exercises || []).length - 1;
                 return (
                   <div key={ex.name} style={{ display: "flex", alignItems: "center", gap: 6, background: "#1a1a1a", border: "1px solid #383838", borderLeft: `3px solid ${c}`, borderRadius: 6, padding: "8px 10px", marginBottom: 5 }}>
@@ -925,7 +948,7 @@ export default function App() {
                   </div>
                 );
               })}
-              <ExercisePicker usedNames={(state.customWorkout?.exercises || []).map((e) => e.name)} onAdd={addCustomExercise} />
+              <ExercisePicker usedNames={(state.customWorkout?.exercises || []).map((e) => e.name)} onAdd={addCustomExercise} exercises={exerciseList} />
             </div>
           ) : (
             <div style={{ background: "#181818", border: "1px solid #383838", borderRadius: 10, padding: "12px 16px", marginBottom: 14 }}>
@@ -1036,7 +1059,7 @@ export default function App() {
         </div>
       )}
 
-      {showBuilder && <ProgramBuilder programs={state.programs} editingName={editingProgram} onSave={saveProgram} onClose={() => { setShowBuilder(false); setEditingProgram(null); }} />}
+      {showBuilder && <ProgramBuilder programs={state.programs} editingName={editingProgram} onSave={saveProgram} onClose={() => { setShowBuilder(false); setEditingProgram(null); }} exercises={exerciseList} />}
 
       {showImport && <ImportModal existingHistory={state.history} onConfirm={importHistory} onClose={() => setShowImport(false)} />}
     </div>
