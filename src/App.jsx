@@ -128,6 +128,18 @@ function calcWarmupSets(workingWeight, barWeight, protocol = WARMUP_PROTOCOL, ro
 const CATEGORY_COLORS = { Lower: "#7eb8f7", Upper: "#c8f542", Power: "#f7a07e" };
 const uid = () => Math.random().toString(36).slice(2, 9);
 
+// Format a duration in seconds as m:ss.
+const fmtDuration = (sec) => `${Math.floor(sec / 60)}:${String(Math.round(sec) % 60).padStart(2, "0")}`;
+
+// Derive each set's rest time (seconds since the previously-completed set) from
+// completion timestamps, so the data stays correct even when sets are toggled.
+function computeRests(sets) {
+  const order = sets.map((s, idx) => ({ idx, at: s.completedAt })).filter((o) => o.at).sort((a, b) => a.at - b.at);
+  const restByIdx = {};
+  order.forEach((o, k) => { restByIdx[o.idx] = k === 0 ? null : Math.round((o.at - order[k - 1].at) / 1000); });
+  return sets.map((s, idx) => ({ ...s, restSec: s.completedAt ? (restByIdx[idx] ?? null) : null }));
+}
+
 // ---- Strong CSV import ----------------------------------------------------
 const KG_TO_LB = 1 / 0.45359237;
 const roundWeight = (lb) => Math.round((Math.round(lb / 0.25) * 0.25) * 100) / 100;
@@ -312,18 +324,40 @@ function SetTracker({ sets, defaultReps, defaultWeight, onUpdate, step = 2.5 }) 
     onUpdate(setsData.length > 0 && setsData.every((s) => s.completed), setsData);
   }, [setsData]);
 
-  const toggle = (i) => setSetsData((prev) => prev.map((s, idx) => idx === i ? { ...s, completed: !s.completed } : s));
+  const toggle = (i) => setSetsData((prev) => {
+    const now = Date.now();
+    const next = prev.map((s, idx) => idx === i ? { ...s, completed: !s.completed, completedAt: !s.completed ? now : null } : s);
+    return computeRests(next);
+  });
   const updateField = (i, field, val) => setSetsData((prev) => prev.map((s, idx) => idx === i ? { ...s, [field]: val } : s));
   const addSet = () => setSetsData((prev) => {
     const last = prev[prev.length - 1] || { weight: defaultWeight, reps: defaultReps };
     return [...prev, { weight: last.weight, reps: last.reps, completed: false }];
   });
-  const removeSet = (i) => setSetsData((prev) => prev.length > 1 ? prev.filter((_, idx) => idx !== i) : prev);
+  const removeSet = (i) => setSetsData((prev) => prev.length > 1 ? computeRests(prev.filter((_, idx) => idx !== i)) : prev);
+
+  // Live count-up rest timer: runs from the most recent set completion while
+  // there are still sets left to do.
+  const lastCompletedAt = setsData.reduce((m, s) => (s.completedAt && s.completedAt > m ? s.completedAt : m), 0);
+  const resting = lastCompletedAt > 0 && setsData.some((s) => !s.completed);
+  const [nowTs, setNowTs] = useState(() => Date.now());
+  useEffect(() => {
+    if (!resting) return;
+    const id = setInterval(() => setNowTs(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [resting, lastCompletedAt]);
+  const restElapsed = resting ? Math.max(0, Math.round((nowTs - lastCompletedAt) / 1000)) : null;
 
   const canRemove = setsData.length > 1;
   const inpStyle = { background: "#111", border: "1px solid #3c3c3c", borderRadius: 4, color: "#e0e0e0", textAlign: "center", fontSize: 14, fontWeight: 700, padding: "4px 0", fontFamily: "monospace", outline: "none" };
   return (
     <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 5 }}>
+      {restElapsed != null && (
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: "rgba(126,184,247,0.08)", border: "1px solid #7eb8f7", borderRadius: 8, padding: "6px 12px" }}>
+          <span style={{ color: "#7eb8f7", fontFamily: "monospace", fontSize: 10, letterSpacing: 1 }}>⏱ RESTING</span>
+          <span style={{ color: "#7eb8f7", fontFamily: "monospace", fontSize: 16, fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>{fmtDuration(restElapsed)}</span>
+        </div>
+      )}
       {setsData.map((set, i) => (
         <div key={i} style={{ display: "flex", alignItems: "center", gap: 6, background: set.completed ? "rgba(200,245,66,0.06)" : "#1a1a1a", border: `1px solid ${set.completed ? "#c8f542" : "#383838"}`, borderRadius: 8, padding: "7px 10px", transition: "all 0.15s" }}>
           <button onClick={() => removeSet(i)} disabled={!canRemove} style={{ width: 26, height: 26, borderRadius: 4, border: "1px solid #383838", background: "transparent", color: canRemove ? "#909090" : "#383838", cursor: canRemove ? "pointer" : "default", fontSize: 15, flexShrink: 0, lineHeight: 1 }}>−</button>
@@ -331,7 +365,7 @@ function SetTracker({ sets, defaultReps, defaultWeight, onUpdate, step = 2.5 }) 
           <input type="number" value={set.weight} min={0} step={step} onChange={(e) => updateField(i, "weight", parseFloat(e.target.value) || 0)} style={{ ...inpStyle, width: 56 }} />
           <span style={{ color: "#707070", fontFamily: "monospace", fontSize: 10 }}>lb×</span>
           <input type="number" value={set.reps} min={0} onChange={(e) => updateField(i, "reps", parseInt(e.target.value) || 0)} style={{ ...inpStyle, width: 32 }} />
-          <span style={{ color: "#707070", fontFamily: "monospace", fontSize: 10, flex: 1 }}>r</span>
+          <span style={{ color: "#707070", fontFamily: "monospace", fontSize: 10, flex: 1 }}>r{set.restSec != null && <span style={{ color: "#7eb8f7", marginLeft: 6 }}>· rest {fmtDuration(set.restSec)}</span>}</span>
           <button onClick={() => toggle(i)} style={{ width: 34, height: 34, borderRadius: 6, border: `2px solid ${set.completed ? "#c8f542" : "#4a4a4a"}`, background: set.completed ? "#c8f542" : "transparent", color: set.completed ? "#0a0a0a" : "#4a4a4a", fontSize: 16, cursor: "pointer", transition: "all 0.15s", flexShrink: 0 }}>{set.completed ? "✓" : ""}</button>
         </div>
       ))}
@@ -484,7 +518,7 @@ function HistoryView({ history }) {
               {ex.setsData?.length > 0 && (
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 3 }}>
                   {ex.setsData.map((set, si) => (
-                    <span key={si} style={{ fontSize: 10, fontFamily: "monospace", color: "#808080", background: "#252525", borderRadius: 4, padding: "2px 6px" }}>{set.weight}lb×{set.reps}</span>
+                    <span key={si} title={set.restSec != null ? `${fmtDuration(set.restSec)} rest before this set` : undefined} style={{ fontSize: 10, fontFamily: "monospace", color: "#808080", background: "#252525", borderRadius: 4, padding: "2px 6px" }}>{set.weight}lb×{set.reps}{set.restSec != null && <span style={{ color: "#5a7ea6" }}> ⏱{fmtDuration(set.restSec)}</span>}</span>
                   ))}
                 </div>
               )}
@@ -641,11 +675,14 @@ function ExerciseDetailView({ name, history, settings, onUpdateSettings, onBack 
               <div key={i} style={{ background: "#1c1c1c", border: "1px solid #383838", borderRadius: 10, padding: "12px 16px" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
                   <span style={{ color: "#c0c0c0", fontFamily: "monospace", fontSize: 11 }}>{new Date(s.date).toLocaleDateString()}</span>
-                  <span style={{ color: "#707070", fontFamily: "monospace", fontSize: 10 }}>vol {s.volume.toLocaleString()}lb</span>
+                  <span style={{ color: "#707070", fontFamily: "monospace", fontSize: 10 }}>
+                    {(() => { const r = s.sets.map((x) => x.restSec).filter((x) => x != null); return r.length ? `⏱ ${fmtDuration(r.reduce((a, b) => a + b, 0) / r.length)} avg · ` : ""; })()}
+                    vol {s.volume.toLocaleString()}lb
+                  </span>
                 </div>
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                   {s.sets.map((set, si) => (
-                    <span key={si} style={{ fontSize: 11, fontFamily: "monospace", color: "#aaa", background: "#252525", borderRadius: 4, padding: "3px 8px" }}>{set.weight}lb×{set.reps}</span>
+                    <span key={si} title={set.restSec != null ? `${fmtDuration(set.restSec)} rest before this set` : undefined} style={{ fontSize: 11, fontFamily: "monospace", color: "#aaa", background: "#252525", borderRadius: 4, padding: "3px 8px" }}>{set.weight}lb×{set.reps}{set.restSec != null && <span style={{ color: "#7eb8f7" }}> ⏱{fmtDuration(set.restSec)}</span>}</span>
                   ))}
                 </div>
               </div>
@@ -810,7 +847,7 @@ export default function App() {
         sets: ex.sets,
         reps: ex.reps,
         weight: state.weights[ex.name] ?? 0,
-        setsData: completedSets[ex.name]?.sets || [],
+        setsData: (completedSets[ex.name]?.sets || []).map(({ weight, reps, completed, restSec }) => ({ weight, reps, completed, ...(restSec != null ? { restSec } : {}) })),
       })),
     };
     const newWeights = { ...state.weights };
