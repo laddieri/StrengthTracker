@@ -97,6 +97,20 @@ function buildExerciseList(state) {
   return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
+// Set-type colors: work sets are green, warmups are pink.
+const WORK_COLOR = "#c8f542";
+const WARMUP_COLOR = "#f48fb1";
+
+// Determine which sets in a group are warmups. Uses the stored `warmup` flag
+// when present; otherwise falls back to a heuristic where sets lighter than the
+// group's top weight are treated as warmups (for history imported before the
+// flag existed).
+function markWarmups(sets) {
+  if (sets.some((s) => "warmup" in s)) return sets.map((s) => !!s.warmup);
+  const maxW = Math.max(0, ...sets.map((s) => s.weight || 0));
+  return sets.map((s) => (s.weight || 0) < maxW);
+}
+
 // Walk history for an exercise: heaviest single (1-rep PR), best session volume, and per-session log.
 function getExerciseStats(history, name) {
   let heaviestSingle = null; // heaviest 1-rep set: { weight, date }
@@ -266,7 +280,7 @@ function buildImportSessions(parsed, mapping) {
     const exercises = [...g.exercises].map(([name, items]) => {
       const work = items.filter((it) => it._type !== "warmup");
       const ref = (work.length ? work : items).reduce((a, b) => (b.weight > a.weight ? b : a));
-      return { name, sets: items.length, reps: ref.reps, weight: ref.weight, setsData: items.map(({ weight, reps, completed }) => ({ weight, reps, completed })) };
+      return { name, sets: items.length, reps: ref.reps, weight: ref.weight, setsData: items.map(({ weight, reps, completed, _type }) => ({ weight, reps, completed, warmup: _type === "warmup" })) };
     });
     sessions.push({ date: g.dateMs, programName: g.workoutName, dayLabel: "", exercises, imported: true, srcId: `strong:${workoutNo}:${g.dateMs}` });
   }
@@ -307,21 +321,21 @@ function WarmupSection({ workingWeight, equipment, protocol, rounding }) {
   const doneCount = sets.filter((_, i) => done[i]).length;
   return (
     <div style={{ marginBottom: 10 }}>
-      <button onClick={() => setOpen((o) => !o)} style={{ background: "none", border: "1px solid #383838", borderRadius: 4, color: "#808080", cursor: "pointer", fontFamily: "monospace", fontSize: 9, padding: "4px 10px", letterSpacing: 1 }}>
-        {open ? "▲ WARMUP" : "▼ WARMUP"} <span style={{ color: doneCount === sets.length ? "#c8f542" : "#707070" }}>{doneCount}/{sets.length}</span>
+      <button onClick={() => setOpen((o) => !o)} style={{ background: "none", border: `1px solid ${WARMUP_COLOR}55`, borderRadius: 4, color: WARMUP_COLOR, cursor: "pointer", fontFamily: "monospace", fontSize: 9, padding: "4px 10px", letterSpacing: 1 }}>
+        {open ? "▲ WARMUP" : "▼ WARMUP"} <span style={{ color: doneCount === sets.length ? WARMUP_COLOR : "#707070" }}>{doneCount}/{sets.length}</span>
       </button>
       {open && (
         <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 4 }}>
           {sets.map(({ pct, reps, weight, barOnly }, i) => (
-            <div key={i} style={{ background: done[i] ? "rgba(200,245,66,0.06)" : "#1d1d1d", border: `1px solid ${done[i] ? "#c8f542" : "#383838"}`, borderRadius: 6, padding: "7px 10px 7px 12px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, transition: "all 0.15s" }}>
+            <div key={i} style={{ background: done[i] ? "rgba(244,143,177,0.08)" : "#1d1d1d", border: `1px solid ${done[i] ? WARMUP_COLOR : "#383838"}`, borderLeft: `3px solid ${WARMUP_COLOR}`, borderRadius: 6, padding: "7px 10px 7px 12px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, transition: "all 0.15s" }}>
               <div style={{ display: "flex", gap: 12, alignItems: "center", minWidth: 0 }}>
-                <span style={{ color: "#808080", fontFamily: "monospace", fontSize: 10, minWidth: 28 }}>{barOnly ? "BAR" : `${Math.round(pct * 100)}%`}</span>
+                <span style={{ color: WARMUP_COLOR, fontFamily: "monospace", fontSize: 10, minWidth: 28 }}>{barOnly ? "BAR" : `${Math.round(pct * 100)}%`}</span>
                 <span style={{ color: "#999", fontFamily: "monospace", fontSize: 10 }}>{reps}r</span>
                 <span style={{ color: "#c0c0c0", fontWeight: 700, fontSize: 13 }}>{weight}lb</span>
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <PlateLoadingDisplay weight={weight} barWeight={bar.weight} plates={equipment.plates} />
-                <button onClick={() => toggle(i)} style={{ width: 28, height: 28, borderRadius: 6, border: `2px solid ${done[i] ? "#c8f542" : "#4a4a4a"}`, background: done[i] ? "#c8f542" : "transparent", color: done[i] ? "#0a0a0a" : "#4a4a4a", fontSize: 14, cursor: "pointer", transition: "all 0.15s", flexShrink: 0 }}>{done[i] ? "✓" : ""}</button>
+                <button onClick={() => toggle(i)} style={{ width: 28, height: 28, borderRadius: 6, border: `2px solid ${done[i] ? WARMUP_COLOR : "#4a4a4a"}`, background: done[i] ? WARMUP_COLOR : "transparent", color: done[i] ? "#0a0a0a" : "#4a4a4a", fontSize: 14, cursor: "pointer", transition: "all 0.15s", flexShrink: 0 }}>{done[i] ? "✓" : ""}</button>
               </div>
             </div>
           ))}
@@ -383,7 +397,7 @@ function SetTracker({ sets, defaultReps, defaultWeight, onUpdate, step = 2.5 }) 
         </div>
       )}
       {setsData.map((set, i) => (
-        <div key={i} style={{ display: "flex", alignItems: "center", gap: 6, background: set.completed ? "rgba(200,245,66,0.06)" : "#1a1a1a", border: `1px solid ${set.completed ? "#c8f542" : "#383838"}`, borderRadius: 8, padding: "7px 10px", transition: "all 0.15s" }}>
+        <div key={i} style={{ display: "flex", alignItems: "center", gap: 6, background: set.completed ? "rgba(200,245,66,0.06)" : "#1a1a1a", border: `1px solid ${set.completed ? WORK_COLOR : "#383838"}`, borderLeft: `3px solid ${WORK_COLOR}`, borderRadius: 8, padding: "7px 10px", transition: "all 0.15s" }}>
           <button onClick={() => removeSet(i)} disabled={!canRemove} style={{ width: 26, height: 26, borderRadius: 4, border: "1px solid #383838", background: "transparent", color: canRemove ? "#909090" : "#383838", cursor: canRemove ? "pointer" : "default", fontSize: 15, flexShrink: 0, lineHeight: 1 }}>−</button>
           <span style={{ color: "#707070", fontFamily: "monospace", fontSize: 10, minWidth: 14, textAlign: "center" }}>{i + 1}</span>
           <input type="number" value={set.weight} min={0} step={step} onChange={(e) => updateField(i, "weight", parseFloat(e.target.value) || 0)} style={{ ...inpStyle, width: 56 }} />
@@ -548,13 +562,13 @@ function HistoryView({ history }) {
                 <span style={{ color: "#aaa" }}>{ex.name}</span>
                 {!ex.setsData?.length && <span style={{ color: "#808080" }}>{ex.sets}×{ex.reps} @ {ex.weight}lb</span>}
               </div>
-              {ex.setsData?.length > 0 && (
+              {ex.setsData?.length > 0 && (() => { const wm = markWarmups(ex.setsData); return (
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 3 }}>
-                  {ex.setsData.map((set, si) => (
-                    <span key={si} title={set.restSec != null ? `${fmtDuration(set.restSec)} rest before this set` : undefined} style={{ fontSize: 10, fontFamily: "monospace", color: "#808080", background: "#252525", borderRadius: 4, padding: "2px 6px" }}>{set.weight}lb×{set.reps}{set.restSec != null && <span style={{ color: "#5a7ea6" }}> ⏱{fmtDuration(set.restSec)}</span>}</span>
-                  ))}
+                  {ex.setsData.map((set, si) => { const c = wm[si] ? WARMUP_COLOR : WORK_COLOR; return (
+                    <span key={si} title={`${wm[si] ? "warmup" : "work"} set${set.restSec != null ? ` · ${fmtDuration(set.restSec)} rest before` : ""}`} style={{ fontSize: 10, fontFamily: "monospace", color: c, background: `${c}14`, border: `1px solid ${c}33`, borderRadius: 4, padding: "2px 6px" }}>{set.weight}lb×{set.reps}{set.restSec != null && <span style={{ color: "#5a7ea6" }}> ⏱{fmtDuration(set.restSec)}</span>}</span>
+                  ); })}
                 </div>
-              )}
+              ); })()}
             </div>
           ))}
         </div>
@@ -806,7 +820,13 @@ function ExerciseDetailView({ name, history, settings, onUpdateSettings, onBack 
       </div>
 
       {/* History */}
-      <div style={sectionLabel}>LIFT HISTORY</div>
+      <div style={{ ...sectionLabel, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <span>LIFT HISTORY</span>
+        <span style={{ display: "flex", gap: 10, fontSize: 9 }}>
+          <span style={{ color: WORK_COLOR }}>● work</span>
+          <span style={{ color: WARMUP_COLOR }}>● warmup</span>
+        </span>
+      </div>
       {!stats.sessions.length
         ? <div style={{ textAlign: "center", color: "#707070", padding: "40px 0", fontFamily: "monospace", fontSize: 12 }}>NO SESSIONS LOGGED YET</div>
         : <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -820,9 +840,9 @@ function ExerciseDetailView({ name, history, settings, onUpdateSettings, onBack 
                   </span>
                 </div>
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                  {s.sets.map((set, si) => (
-                    <span key={si} title={set.restSec != null ? `${fmtDuration(set.restSec)} rest before this set` : undefined} style={{ fontSize: 11, fontFamily: "monospace", color: "#aaa", background: "#252525", borderRadius: 4, padding: "3px 8px" }}>{set.weight}lb×{set.reps}{set.restSec != null && <span style={{ color: "#7eb8f7" }}> ⏱{fmtDuration(set.restSec)}</span>}</span>
-                  ))}
+                  {(() => { const wm = markWarmups(s.sets); return s.sets.map((set, si) => { const c = wm[si] ? WARMUP_COLOR : WORK_COLOR; return (
+                    <span key={si} title={`${wm[si] ? "warmup" : "work"} set${set.restSec != null ? ` · ${fmtDuration(set.restSec)} rest before` : ""}`} style={{ fontSize: 11, fontFamily: "monospace", color: c, background: `${c}14`, border: `1px solid ${c}33`, borderRadius: 4, padding: "3px 8px" }}>{set.weight}lb×{set.reps}{set.restSec != null && <span style={{ color: "#7eb8f7" }}> ⏱{fmtDuration(set.restSec)}</span>}</span>
+                  ); }); })()}
                 </div>
               </div>
             ))}
