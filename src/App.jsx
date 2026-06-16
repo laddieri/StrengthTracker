@@ -1006,10 +1006,12 @@ export default function App() {
             : <>
                 <div style={{ fontSize: 22, fontWeight: 900, letterSpacing: 2, marginBottom: 6 }}>EXERCISES</div>
                 <div style={{ fontSize: 11, color: "#707070", fontFamily: "monospace", marginBottom: 16 }}>tap an exercise for history, PRs & settings</div>
-                {allExerciseNames(state).map((exName) => {
+                {allExerciseNames(state)
+                  .map((exName) => ({ name: exName, st: getExerciseStats(state.history, exName) }))
+                  .sort((a, b) => b.st.sessions.length - a.st.sessions.length || a.name.localeCompare(b.name))
+                  .map(({ name: exName, st }) => {
                   const lib = EXERCISE_LIBRARY.find((e) => e.name === exName);
                   const c = lib ? CATEGORY_COLORS[lib.category] : "#888";
-                  const st = getExerciseStats(state.history, exName);
                   return (
                     <button key={exName} onClick={() => setSelectedExercise(exName)} style={{ display: "flex", width: "100%", justifyContent: "space-between", alignItems: "center", background: "#1c1c1c", border: "1px solid #383838", borderLeft: `3px solid ${c}`, borderRadius: 10, padding: "12px 16px", marginBottom: 8, cursor: "pointer", textAlign: "left" }}>
                       <div>
