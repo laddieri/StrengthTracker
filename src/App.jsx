@@ -117,10 +117,12 @@ function calcPlateLoading(targetWeight, barWeight, plates) {
 
 function calcWarmupSets(workingWeight, barWeight, protocol = WARMUP_PROTOCOL, rounding = 2.5) {
   const unit = rounding > 0 ? rounding : 2.5;
-  return protocol.map(({ pct, reps }) => ({
+  const pctSets = protocol.map(({ pct, reps }) => ({
     pct, reps,
     weight: Math.max(Math.round(workingWeight * pct / unit) * unit, barWeight),
   }));
+  // Always start with an empty-bar set for 10 reps, then ramp up by percentage.
+  return [{ pct: null, reps: 10, weight: barWeight, barOnly: true }, ...pctSets];
 }
 
 const CATEGORY_COLORS = { Lower: "#7eb8f7", Upper: "#c8f542", Power: "#f7a07e" };
@@ -277,10 +279,10 @@ function WarmupSection({ workingWeight, equipment, protocol, rounding }) {
       </button>
       {open && (
         <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 4 }}>
-          {sets.map(({ pct, reps, weight }) => (
-            <div key={pct} style={{ background: "#1d1d1d", border: "1px solid #383838", borderRadius: 6, padding: "7px 12px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          {sets.map(({ pct, reps, weight, barOnly }, i) => (
+            <div key={i} style={{ background: "#1d1d1d", border: "1px solid #383838", borderRadius: 6, padding: "7px 12px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
-                <span style={{ color: "#808080", fontFamily: "monospace", fontSize: 10, minWidth: 28 }}>{Math.round(pct * 100)}%</span>
+                <span style={{ color: "#808080", fontFamily: "monospace", fontSize: 10, minWidth: 28 }}>{barOnly ? "BAR" : `${Math.round(pct * 100)}%`}</span>
                 <span style={{ color: "#999", fontFamily: "monospace", fontSize: 10 }}>{reps}r</span>
                 <span style={{ color: "#c0c0c0", fontWeight: 700, fontSize: 13 }}>{weight}lb</span>
               </div>
@@ -603,10 +605,11 @@ function ExerciseDetailView({ name, history, settings, onUpdateSettings, onBack 
           </div>
         </div>
 
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
           <div style={{ fontSize: 12, color: "#d0d0d0", fontWeight: 700 }}>Warmup sets</div>
           <button onClick={resetWarmup} style={{ background: "none", border: "1px solid #3c3c3c", borderRadius: 4, color: "#909090", cursor: "pointer", padding: "4px 10px", fontFamily: "monospace", fontSize: 9 }}>RESET</button>
         </div>
+        <div style={{ fontSize: 10, color: "#707070", fontFamily: "monospace", marginBottom: 10 }}>an empty-bar set of 10 reps is always added first, then these percentage sets</div>
         <div style={{ display: "flex", gap: 8, padding: "0 4px 6px", fontSize: 9, color: "#707070", fontFamily: "monospace" }}>
           <span style={{ width: 32 }}>#</span>
           <span style={{ flex: 1 }}>% OF WORK SET</span>
