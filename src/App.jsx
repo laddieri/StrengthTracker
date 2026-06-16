@@ -111,6 +111,25 @@ function markWarmups(sets) {
   return sets.map((s) => (s.weight || 0) < maxW);
 }
 
+// Derive program-day exercises ({ name, sets, reps, increment }) from a logged
+// session: count the work sets (excluding warmups) and use the most common
+// work-set rep count.
+function sessionToProgramExercises(session, state) {
+  return session.exercises.map((ex) => {
+    const sets = ex.setsData?.length ? ex.setsData : [];
+    const wm = sets.length ? markWarmups(sets) : [];
+    const workSets = sets.filter((_, i) => !wm[i]);
+    const count = workSets.length || ex.sets || 3;
+    let reps = ex.reps || 5;
+    if (workSets.length) {
+      const freq = {};
+      workSets.forEach((s) => { freq[s.reps] = (freq[s.reps] || 0) + 1; });
+      reps = Number(Object.entries(freq).sort((a, b) => b[1] - a[1])[0][0]);
+    }
+    return { name: ex.name, sets: count, reps, increment: getExerciseSettings(state, ex.name).increment };
+  });
+}
+
 // Walk history for an exercise: heaviest single (1-rep PR), best session volume, and per-session log.
 function getExerciseStats(history, name) {
   let heaviestSingle = null; // heaviest 1-rep set: { weight, date }
@@ -587,18 +606,21 @@ function ProgramBuilder({ programs, editingName, onSave, onClose, exercises = EX
   );
 }
 
-function HistoryView({ history }) {
+function HistoryView({ history, onSaveAsProgram }) {
   if (!history.length) return <div style={{ textAlign: "center", color: "#707070", padding: "60px 0", fontFamily: "monospace", fontSize: 12 }}>NO SESSIONS LOGGED YET</div>;
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       {[...history].reverse().map((s, i) => (
         <div key={i} style={{ background: "#1c1c1c", border: "1px solid #383838", borderRadius: 10, padding: "14px 18px" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, gap: 8 }}>
             <span style={{ color: "#c8f542", fontWeight: 700, fontSize: 14 }}>
               {s.programName}{s.dayLabel ? ` — DAY ${s.dayLabel}` : ""}
               {s.imported && <span style={{ color: "#707070", fontSize: 9, fontFamily: "monospace", marginLeft: 6, border: "1px solid #383838", borderRadius: 3, padding: "1px 5px" }}>IMPORTED</span>}
             </span>
-            <span style={{ color: "#707070", fontSize: 11, fontFamily: "monospace" }}>{new Date(s.date).toLocaleDateString()}</span>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+              <span style={{ color: "#707070", fontSize: 11, fontFamily: "monospace" }}>{new Date(s.date).toLocaleDateString()}</span>
+              {onSaveAsProgram && <button onClick={() => onSaveAsProgram(s)} title="Save this workout as a program day" style={{ background: "none", border: "1px solid #3c3c3c", borderRadius: 5, color: "#7eb8f7", cursor: "pointer", padding: "3px 8px", fontFamily: "monospace", fontSize: 9, fontWeight: 700, letterSpacing: 1 }}>+ PROGRAM</button>}
+            </div>
           </div>
           {s.exercises.map((ex) => (
             <div key={ex.name} style={{ marginBottom: 4 }}>
@@ -1014,6 +1036,81 @@ function makeFireworkBursts() {
   }));
 }
 
+// Modal to save a logged session as a program day — into a new program or
+// appended to an existing one.
+function SaveWorkoutModal({ session, exercises, programs, onSave, onClose }) {
+  const names = Object.keys(programs);
+  const [mode, setMode] = useState(names.length ? "existing" : "new");
+  const [targetProgram, setTargetProgram] = useState(names[0] || "");
+  const [newName, setNewName] = useState("");
+  const startLabel = session.dayLabel && !["Custom", ""].includes(session.dayLabel) ? session.dayLabel : "A";
+  const [label, setLabel] = useState(startLabel);
+
+  const inp = { background: "#080808", border: "1px solid #3c3c3c", borderRadius: 6, color: "#f0f0f0", fontFamily: "monospace", fontSize: 13, padding: "9px 12px", outline: "none", width: "100%" };
+  const handleSave = () => {
+    const lab = (label.trim() || "A").slice(0, 3).toUpperCase();
+    if (mode === "new") {
+      const nm = newName.trim();
+      if (!nm) return alert("Enter a program name");
+      if (names.includes(nm)) return alert("A program with that name already exists — pick 'existing program' or another name.");
+      onSave({ isNew: true, programName: nm, label: lab });
+    } else {
+      if (!targetProgram) return alert("Select a program");
+      onSave({ isNew: false, programName: targetProgram, label: lab });
+    }
+  };
+
+  const tab = (m, text) => (
+    <button onClick={() => setMode(m)} style={{ flex: 1, padding: "8px 6px", borderRadius: 6, border: `1px solid ${mode === m ? "#c8f542" : "#3c3c3c"}`, background: mode === m ? "rgba(200,245,66,0.1)" : "#1d1d1d", color: mode === m ? "#c8f542" : "#909090", fontFamily: "monospace", fontSize: 11, fontWeight: 700, cursor: "pointer", letterSpacing: 1 }}>{text}</button>
+  );
+
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.92)", zIndex: 110, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: "#161616", border: "1px solid #383838", borderRadius: 14, padding: 22, width: "100%", maxWidth: 420, maxHeight: "85vh", overflowY: "auto" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+          <div style={{ fontSize: 18, fontWeight: 900, letterSpacing: 1, color: "#c8f542" }}>SAVE AS PROGRAM</div>
+          <button onClick={onClose} style={{ background: "none", border: "none", color: "#909090", cursor: "pointer", fontSize: 22 }}>✕</button>
+        </div>
+
+        <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
+          {names.length > 0 && tab("existing", "ADD TO PROGRAM")}
+          {tab("new", "NEW PROGRAM")}
+        </div>
+
+        {mode === "existing"
+          ? <div style={{ marginBottom: 14 }}>
+              <div style={{ fontSize: 10, color: "#808080", fontFamily: "monospace", marginBottom: 6 }}>PROGRAM</div>
+              <select value={targetProgram} onChange={(e) => setTargetProgram(e.target.value)} style={inp}>
+                {names.map((n) => <option key={n} value={n}>{n}</option>)}
+              </select>
+            </div>
+          : <div style={{ marginBottom: 14 }}>
+              <div style={{ fontSize: 10, color: "#808080", fontFamily: "monospace", marginBottom: 6 }}>NEW PROGRAM NAME</div>
+              <input autoFocus value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="e.g. My Split" style={inp} />
+            </div>
+        }
+
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ fontSize: 10, color: "#808080", fontFamily: "monospace", marginBottom: 6 }}>DAY LABEL</div>
+          <input value={label} onChange={(e) => setLabel(e.target.value)} style={{ ...inp, width: 80, textAlign: "center", fontSize: 16, color: "#c8f542", fontWeight: 900 }} />
+        </div>
+
+        <div style={{ fontSize: 10, color: "#808080", fontFamily: "monospace", letterSpacing: 1, marginBottom: 8 }}>THIS DAY ({exercises.length} exercise{exercises.length !== 1 ? "s" : ""})</div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 5, marginBottom: 20 }}>
+          {exercises.map((ex) => (
+            <div key={ex.name} style={{ display: "flex", justifyContent: "space-between", background: "#1c1c1c", border: "1px solid #383838", borderRadius: 6, padding: "8px 12px" }}>
+              <span style={{ fontSize: 13, color: "#ddd", fontWeight: 600 }}>{ex.name}</span>
+              <span style={{ fontSize: 11, color: "#808080", fontFamily: "monospace" }}>{ex.sets}×{ex.reps} · +{ex.increment}lb</span>
+            </div>
+          ))}
+        </div>
+
+        <button onClick={handleSave} style={{ width: "100%", padding: 14, background: "#c8f542", border: "none", borderRadius: 10, color: "#0a0a0a", fontWeight: 900, fontSize: 14, letterSpacing: 1, cursor: "pointer" }}>SAVE PROGRAM</button>
+      </div>
+    </div>
+  );
+}
+
 // Celebratory overlay shown when a workout sets a new PR. Renders looping CSS
 // firework bursts behind a card listing each new record.
 function PrCelebration({ prs, onClose }) {
@@ -1072,6 +1169,7 @@ export default function App() {
   const [selectedExercise, setSelectedExercise] = useState(null);
   const [showImport, setShowImport] = useState(false);
   const [prCelebration, setPrCelebration] = useState(null);
+  const [saveSession, setSaveSession] = useState(null);
 
   const importHistory = (sessions, latestWeights) => {
     setState((s) => ({
@@ -1081,6 +1179,17 @@ export default function App() {
     }));
     setShowImport(false);
     setView("history");
+  };
+
+  const openSaveWorkout = (session) => setSaveSession({ session, exercises: sessionToProgramExercises(session, state) });
+  const saveWorkoutAsProgram = ({ isNew, programName, label }) => {
+    const day = { id: uid(), label, exercises: saveSession.exercises };
+    setState((s) => {
+      const days = isNew ? [day] : [...(s.programs[programName] || []), day];
+      return { ...s, programs: { ...s.programs, [programName]: days }, ...(isNew ? { activeProgram: programName, currentDayIndex: 0 } : {}) };
+    });
+    setSaveSession(null);
+    setView("programs");
   };
 
   const openExerciseDetail = (name) => { setSelectedExercise(name); setView("exercises"); };
@@ -1273,7 +1382,7 @@ export default function App() {
             <div style={{ fontSize: 22, fontWeight: 900, letterSpacing: 2 }}>SESSION HISTORY</div>
             <button onClick={() => setShowImport(true)} style={{ padding: "8px 14px", background: "#1e1e1e", border: "1px solid #3c3c3c", borderRadius: 6, color: "#c8f542", fontFamily: "monospace", fontSize: 11, fontWeight: 700, cursor: "pointer", letterSpacing: 1 }}>↓ IMPORT</button>
           </div>
-          <HistoryView history={state.history} />
+          <HistoryView history={state.history} onSaveAsProgram={openSaveWorkout} />
         </>}
 
         {view === "exercises" && (
@@ -1353,6 +1462,8 @@ export default function App() {
       {showImport && <ImportModal existingHistory={state.history} onConfirm={importHistory} onClose={() => setShowImport(false)} />}
 
       {prCelebration && <PrCelebration prs={prCelebration} onClose={() => setPrCelebration(null)} />}
+
+      {saveSession && <SaveWorkoutModal session={saveSession.session} exercises={saveSession.exercises} programs={state.programs} onSave={saveWorkoutAsProgram} onClose={() => setSaveSession(null)} />}
     </div>
   );
 }
