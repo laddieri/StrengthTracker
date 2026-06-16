@@ -103,6 +103,25 @@ button:focus-visible {
   }
 }
 
+.pr-particle {
+  position: absolute;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  opacity: 0;
+  animation: pr-particle 1.3s ease-out infinite;
+}
+
+@keyframes pr-particle {
+  0% { transform: translate(0, 0) scale(1.1); opacity: 1; }
+  70% { opacity: 1; }
+  100% { transform: translate(var(--tx), var(--ty)) scale(0.2); opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pr-particle { animation: none; opacity: 0.9; }
+}
+
 @media (prefers-color-scheme: light) {
   :root {
     color: #213547;
