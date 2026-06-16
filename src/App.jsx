@@ -99,8 +99,8 @@ function buildExerciseList(state) {
 
 // Walk history for an exercise: heaviest single (1-rep PR), best session volume, and per-session log.
 function getExerciseStats(history, name) {
-  let heaviestSingle = null; // { weight, date }
-  let maxVolume = null;      // best single set by reps×weight: { reps, weight, volume, date }
+  let heaviestSingle = null; // heaviest 1-rep set: { weight, date }
+  let topFive = null;        // heaviest set of 5 reps: { weight, date }
   const sessions = [];
   (history || []).forEach((s) => {
     const ex = s.exercises.find((e) => e.name === name);
@@ -110,14 +110,13 @@ function getExerciseStats(history, name) {
     let volume = 0;
     sets.forEach((set) => {
       const w = set.weight || 0, r = set.reps || 0;
-      const vol = w * r;
-      volume += vol;
+      volume += w * r;
       if (r === 1 && (!heaviestSingle || w > heaviestSingle.weight)) heaviestSingle = { weight: w, date: s.date };
-      if (vol > 0 && (!maxVolume || vol > maxVolume.volume)) maxVolume = { reps: r, weight: w, volume: vol, date: s.date };
+      if (r === 5 && (!topFive || w > topFive.weight)) topFive = { weight: w, date: s.date };
     });
     sessions.push({ date: s.date, sets, volume });
   });
-  return { heaviestSingle, maxVolume, sessions: sessions.reverse() };
+  return { heaviestSingle, topFive, sessions: sessions.reverse() };
 }
 
 function calcPlateLoading(targetWeight, barWeight, plates) {
@@ -652,9 +651,9 @@ function ExerciseDetailView({ name, history, settings, onUpdateSettings, onBack 
           sub={stats.heaviestSingle ? new Date(stats.heaviestSingle.date).toLocaleDateString() : "no 1-rep sets logged"}
         />
         <PrCard
-          label="MAX VOLUME"
-          value={stats.maxVolume ? `${stats.maxVolume.reps} × ${stats.maxVolume.weight}lb` : ""}
-          sub={stats.maxVolume ? new Date(stats.maxVolume.date).toLocaleDateString() : "no sets logged"}
+          label="TOP SET OF 5"
+          value={stats.topFive ? `${stats.topFive.weight}lb` : ""}
+          sub={stats.topFive ? new Date(stats.topFive.date).toLocaleDateString() : "no 5-rep sets logged"}
         />
       </div>
 
