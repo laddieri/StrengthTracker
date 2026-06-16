@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 
 const EXERCISE_LIBRARY = [
   { name: "Squat",                defaultSets: 3, defaultReps: 5, increment: 5,   category: "Lower" },
@@ -279,7 +279,7 @@ const initialState = () => {
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved) return { equipment: DEFAULT_EQUIPMENT, customWorkout: { exercises: [] }, exerciseSettings: {}, ...JSON.parse(saved) };
-  } catch {}
+  } catch { /* ignore corrupt or unavailable storage */ }
   return { weights: { ...DEFAULT_WEIGHTS }, history: [], programs: DEFAULT_PROGRAMS, activeProgram: "Starting Strength", currentDayIndex: 0, equipment: DEFAULT_EQUIPMENT, customWorkout: { exercises: [] }, exerciseSettings: {} };
 };
 
@@ -336,18 +336,18 @@ function SetTracker({ sets, defaultReps, defaultWeight, onUpdate, step = 2.5 }) 
   const [setsData, setSetsData] = useState(
     () => Array.from({ length: sets }, () => ({ weight: defaultWeight, reps: defaultReps, completed: false }))
   );
-  const prevWeight = useRef(defaultWeight);
-
-  useEffect(() => {
-    if (prevWeight.current !== defaultWeight) {
-      setSetsData((prev) => prev.map((s) => s.completed ? s : { ...s, weight: defaultWeight }));
-      prevWeight.current = defaultWeight;
-    }
-  }, [defaultWeight]);
+  // When the working weight changes, sync it onto sets that aren't completed
+  // yet. Adjusting state during render (guarded) is React's recommended
+  // alternative to doing this in an effect.
+  const [prevWeight, setPrevWeight] = useState(defaultWeight);
+  if (prevWeight !== defaultWeight) {
+    setPrevWeight(defaultWeight);
+    setSetsData((prev) => prev.map((s) => s.completed ? s : { ...s, weight: defaultWeight }));
+  }
 
   useEffect(() => {
     onUpdate(setsData.length > 0 && setsData.every((s) => s.completed), setsData);
-  }, [setsData]);
+  }, [setsData, onUpdate]);
 
   const toggle = (i) => setSetsData((prev) => {
     const now = Date.now();
@@ -405,6 +405,10 @@ function ExerciseCard({ exercise, weight, onWeightChange, onComplete, equipment,
   const catColor = lib ? CATEGORY_COLORS[lib.category] : "#888";
   const bar = equipment?.bars.find((b) => b.name === equipment.activeBar) || equipment?.bars[0];
   const increment = settings?.increment ?? exercise.increment;
+  const handleUpdate = useCallback((isDone, setsData) => {
+    setDone(isDone);
+    onComplete(exercise.name, isDone, setsData);
+  }, [onComplete, exercise.name]);
   return (
     <div style={{ background: done ? "rgba(200,245,66,0.04)" : "#1c1c1c", border: `1px solid ${done ? "#c8f542" : "#383838"}`, borderLeft: `3px solid ${done ? "#c8f542" : catColor}`, borderRadius: 10, padding: "18px 20px", transition: "all 0.3s" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
@@ -429,7 +433,7 @@ function ExerciseCard({ exercise, weight, onWeightChange, onComplete, equipment,
         </div>
       </div>
       {equipment && weight > 0 && <div style={{ marginTop: 12 }}><WarmupSection workingWeight={weight} equipment={equipment} protocol={settings?.warmup} rounding={increment} /></div>}
-      <SetTracker sets={exercise.sets} defaultReps={exercise.reps} defaultWeight={weight} step={increment} onUpdate={(isDone, setsData) => { setDone(isDone); onComplete(exercise.name, isDone, setsData); }} />
+      <SetTracker sets={exercise.sets} defaultReps={exercise.reps} defaultWeight={weight} step={increment} onUpdate={handleUpdate} />
     </div>
   );
 }
@@ -483,7 +487,7 @@ function ProgramBuilder({ programs, editingName, onSave, onClose, exercises = EX
           <div style={{ fontSize: 10, color: "#808080", fontFamily: "monospace", marginBottom: 6 }}>PROGRAM NAME</div>
           <input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Texas Method, 3-Day Split..." style={{ ...inp({ width: "100%", fontSize: 14, padding: "10px 12px" }) }} />
         </div>
-        {days.map((day, dayIdx) => (
+        {days.map((day) => (
           <div key={day.id} style={{ background: "#1d1d1d", border: "1px solid #383838", borderRadius: 10, padding: 14, marginBottom: 10 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -854,7 +858,7 @@ export default function App() {
   }));
 
   useEffect(() => {
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch {}
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch { /* ignore quota / unavailable storage */ }
   }, [state]);
 
   const exerciseList = useMemo(() => buildExerciseList(state), [state]);
@@ -865,7 +869,7 @@ export default function App() {
   const allDone = activeExercises.length > 0 && activeExercises.every((ex) => completedSets[ex.name]?.done);
 
   const updateWeight = (name, val) => setState((s) => ({ ...s, weights: { ...s.weights, [name]: Math.max(0, val) } }));
-  const markComplete = (name, isDone, setsData) => setCompletedSets((p) => ({ ...p, [name]: { done: isDone, sets: setsData } }));
+  const markComplete = useCallback((name, isDone, setsData) => setCompletedSets((p) => ({ ...p, [name]: { done: isDone, sets: setsData } })), []);
   const finishWorkout = () => {
     if (!isCustomMode && !day) return;
     const exes = isCustomMode ? (state.customWorkout?.exercises || []) : programExercises;
