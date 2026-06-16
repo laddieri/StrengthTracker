@@ -375,9 +375,9 @@ function SetTracker({ sets, defaultReps, defaultWeight, onUpdate, step = 2.5, al
   const removeSet = (i) => setSetsData((prev) => prev.length > 1 ? computeRests(prev.filter((_, idx) => idx !== i)) : prev);
 
   // Light day: set every work set to 5 reps at 85% of the top weight, rounded
-  // to the exercise's increment.
+  // to the nearest increment (the exercise's smallest weight-increase amount).
   const unit = step > 0 ? step : 2.5;
-  const lightWeight = Math.round((defaultWeight * 0.85) / unit) * unit;
+  const lightWeight = Math.round((Math.round((defaultWeight * 0.85) / unit) * unit) * 100) / 100;
   const applyLightDay = () => setSetsData((prev) => prev.map((s) => ({ ...s, weight: lightWeight, reps: 5 })));
 
   // Live count-up rest timer: runs from the most recent set completion while
