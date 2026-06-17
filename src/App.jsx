@@ -100,7 +100,8 @@ function buildExerciseList(state) {
 // Set-type colors: work sets are green, warmups are pink.
 const WORK_COLOR = "#c8f542";
 const WARMUP_COLOR = "#f48fb1";
-const PR_COLOR = "#ffd54f";
+const PR_COLOR = "#ffd54f";      // a set that was a PR when performed
+const CUR_PR_COLOR = "#ff7043";  // the current (most recent) record for a lift
 
 // Determine which sets in a group are warmups. Uses the stored `warmup` flag
 // when present; otherwise falls back to a heuristic where sets lighter than the
@@ -156,10 +157,11 @@ function getExerciseStats(history, name) {
 // Identify the individual sets that set a new PR (heaviest single-rep or
 // heaviest 5-rep, per exercise) at the time they were performed, walking
 // history chronologically. Returns a Map of `${date}|${name}|${setIndex}` ->
-// { single?, five? }. Warmup sets are ignored.
+// { single?, five?, curSingle?, curFive? }, where cur* marks the set holding
+// the current (most recent) record. Warmup sets are ignored.
 function computePrSetKeys(history) {
   const keys = new Map();
-  const singleMax = {}, fiveMax = {};
+  const singleMax = {}, fiveMax = {}, curSingleKey = {}, curFiveKey = {};
   [...(history || [])].sort((a, b) => a.date - b.date).forEach((s) => {
     s.exercises.forEach((ex) => {
       const sets = ex.setsData || [];
@@ -170,12 +172,22 @@ function computePrSetKeys(history) {
         const w = set.weight || 0, r = set.reps || 0;
         if (w <= 0) return;
         const key = `${s.date}|${ex.name}|${i}`;
-        if (r === 1 && w > (singleMax[ex.name] ?? 0)) { singleMax[ex.name] = w; keys.set(key, { ...keys.get(key), single: true }); }
-        if (r === 5 && w > (fiveMax[ex.name] ?? 0)) { fiveMax[ex.name] = w; keys.set(key, { ...keys.get(key), five: true }); }
+        if (r === 1 && w > (singleMax[ex.name] ?? 0)) { singleMax[ex.name] = w; keys.set(key, { ...keys.get(key), single: true }); curSingleKey[ex.name] = key; }
+        if (r === 5 && w > (fiveMax[ex.name] ?? 0)) { fiveMax[ex.name] = w; keys.set(key, { ...keys.get(key), five: true }); curFiveKey[ex.name] = key; }
       });
     });
   });
+  Object.values(curSingleKey).forEach((k) => keys.set(k, { ...keys.get(k), curSingle: true }));
+  Object.values(curFiveKey).forEach((k) => keys.set(k, { ...keys.get(k), curFive: true }));
   return keys;
+}
+
+// Derive chip styling info from a PR-map entry (or undefined for a normal set).
+function prInfo(pr) {
+  if (!pr) return null;
+  const isCur = !!(pr.curSingle || pr.curFive);
+  const label = pr.curSingle ? "current single-rep PR" : pr.curFive ? "current top-5 PR" : pr.single ? "single-rep PR" : "top-5 PR";
+  return { isCur, color: isCur ? CUR_PR_COLOR : PR_COLOR, label };
 }
 
 function calcPlateLoading(targetWeight, barWeight, plates) {
@@ -658,11 +670,10 @@ function HistoryView({ history, onSaveAsProgram }) {
               {ex.setsData?.length > 0 && (() => { const wm = markWarmups(ex.setsData); return (
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 3 }}>
                   {ex.setsData.map((set, si) => {
-                    const pr = prKeys.get(`${s.date}|${ex.name}|${si}`);
-                    const c = pr ? PR_COLOR : (wm[si] ? WARMUP_COLOR : WORK_COLOR);
-                    const prLabel = pr ? [pr.single && "single-rep PR", pr.five && "5-rep PR"].filter(Boolean).join(" + ") : "";
+                    const info = prInfo(prKeys.get(`${s.date}|${ex.name}|${si}`));
+                    const c = info ? info.color : (wm[si] ? WARMUP_COLOR : WORK_COLOR);
                     return (
-                    <span key={si} title={pr ? prLabel : `${wm[si] ? "warmup" : "work"} set${set.restSec != null ? ` · ${fmtDuration(set.restSec)} rest before` : ""}`} style={{ fontSize: 10, fontFamily: "monospace", color: c, background: `${c}${pr ? "22" : "14"}`, border: `1px solid ${pr ? PR_COLOR : `${c}33`}`, borderRadius: 4, padding: "2px 6px", fontWeight: pr ? 700 : 400, boxShadow: pr ? `0 0 6px ${PR_COLOR}55` : "none" }}>{pr && "★ "}{set.weight}lb×{set.reps}{set.restSec != null && <span style={{ color: "#5a7ea6" }}> ⏱{fmtDuration(set.restSec)}</span>}</span>
+                    <span key={si} title={info ? info.label : `${wm[si] ? "warmup" : "work"} set${set.restSec != null ? ` · ${fmtDuration(set.restSec)} rest before` : ""}`} style={{ fontSize: 10, fontFamily: "monospace", color: c, background: `${c}${info ? "22" : "14"}`, border: `1px solid ${info ? c : `${c}33`}`, borderRadius: 4, padding: "2px 6px", fontWeight: info ? 700 : 400, boxShadow: info ? `0 0 ${info.isCur ? 8 : 6}px ${c}${info.isCur ? "99" : "55"}` : "none" }}>{info && (info.isCur ? "🏆 " : "★ ")}{set.weight}lb×{set.reps}{set.restSec != null && <span style={{ color: "#5a7ea6" }}> ⏱{fmtDuration(set.restSec)}</span>}</span>
                   ); })}
                 </div>
               ); })()}
@@ -920,10 +931,11 @@ function ExerciseDetailView({ name, history, settings, onUpdateSettings, onBack 
       {/* History */}
       <div style={{ ...sectionLabel, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <span>LIFT HISTORY</span>
-        <span style={{ display: "flex", gap: 10, fontSize: 9 }}>
+        <span style={{ display: "flex", gap: 10, fontSize: 9, flexWrap: "wrap" }}>
           <span style={{ color: WORK_COLOR }}>● work</span>
           <span style={{ color: WARMUP_COLOR }}>● warmup</span>
           <span style={{ color: PR_COLOR }}>★ PR</span>
+          <span style={{ color: CUR_PR_COLOR }}>🏆 current</span>
         </span>
       </div>
       {!stats.sessions.length
@@ -940,11 +952,10 @@ function ExerciseDetailView({ name, history, settings, onUpdateSettings, onBack 
                 </div>
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                   {(() => { const wm = markWarmups(s.sets); return s.sets.map((set, si) => {
-                    const pr = prKeys.get(`${s.date}|${name}|${si}`);
-                    const c = pr ? PR_COLOR : (wm[si] ? WARMUP_COLOR : WORK_COLOR);
-                    const prLabel = pr ? [pr.single && "single-rep PR", pr.five && "5-rep PR"].filter(Boolean).join(" + ") : "";
+                    const info = prInfo(prKeys.get(`${s.date}|${name}|${si}`));
+                    const c = info ? info.color : (wm[si] ? WARMUP_COLOR : WORK_COLOR);
                     return (
-                    <span key={si} title={pr ? prLabel : `${wm[si] ? "warmup" : "work"} set${set.restSec != null ? ` · ${fmtDuration(set.restSec)} rest before` : ""}`} style={{ fontSize: 11, fontFamily: "monospace", color: c, background: `${c}${pr ? "22" : "14"}`, border: `1px solid ${pr ? PR_COLOR : `${c}33`}`, borderRadius: 4, padding: "3px 8px", fontWeight: pr ? 700 : 400, boxShadow: pr ? `0 0 6px ${PR_COLOR}55` : "none" }}>{pr && "★ "}{set.weight}lb×{set.reps}{set.restSec != null && <span style={{ color: "#7eb8f7" }}> ⏱{fmtDuration(set.restSec)}</span>}</span>
+                    <span key={si} title={info ? info.label : `${wm[si] ? "warmup" : "work"} set${set.restSec != null ? ` · ${fmtDuration(set.restSec)} rest before` : ""}`} style={{ fontSize: 11, fontFamily: "monospace", color: c, background: `${c}${info ? "22" : "14"}`, border: `1px solid ${info ? c : `${c}33`}`, borderRadius: 4, padding: "3px 8px", fontWeight: info ? 700 : 400, boxShadow: info ? `0 0 ${info.isCur ? 8 : 6}px ${c}${info.isCur ? "99" : "55"}` : "none" }}>{info && (info.isCur ? "🏆 " : "★ ")}{set.weight}lb×{set.reps}{set.restSec != null && <span style={{ color: "#7eb8f7" }}> ⏱{fmtDuration(set.restSec)}</span>}</span>
                   ); }); })()}
                 </div>
               </div>
@@ -1419,7 +1430,7 @@ export default function App() {
             <div style={{ fontSize: 22, fontWeight: 900, letterSpacing: 2 }}>SESSION HISTORY</div>
             <button onClick={() => setShowImport(true)} style={{ padding: "8px 14px", background: "#1e1e1e", border: "1px solid #3c3c3c", borderRadius: 6, color: "#c8f542", fontFamily: "monospace", fontSize: 11, fontWeight: 700, cursor: "pointer", letterSpacing: 1 }}>↓ IMPORT</button>
           </div>
-          <div style={{ fontSize: 9, color: "#707070", fontFamily: "monospace", marginBottom: 14 }}><span style={{ color: PR_COLOR }}>★ gold</span> = a new PR (heaviest single or top set of 5) when it was set</div>
+          <div style={{ fontSize: 9, color: "#707070", fontFamily: "monospace", marginBottom: 14 }}><span style={{ color: PR_COLOR }}>★ gold</span> = a PR when set · <span style={{ color: CUR_PR_COLOR }}>🏆 orange</span> = current record for that lift</div>
           <HistoryView history={state.history} onSaveAsProgram={openSaveWorkout} />
         </>}
 
