@@ -1403,8 +1403,8 @@ export default function App() {
     <div style={{ minHeight: "100vh", background: "#080808", color: "#f0f0f0" }}>
       <div className="app-header">
         <div>
-          <div style={{ fontSize: 18, fontWeight: 900, letterSpacing: 3, color: "#c8f542" }}>STARTING STRENGTH</div>
-          <div style={{ fontSize: 9, color: "#707070", fontFamily: "monospace", letterSpacing: 2 }}>LINEAR PROGRESSION TRACKER</div>
+          <div style={{ fontSize: 18, fontWeight: 900, letterSpacing: 3, color: "#c8f542" }}>STRENGTH TRACKER</div>
+          <div style={{ fontSize: 9, color: "#707070", fontFamily: "monospace", letterSpacing: 2 }}>LINEAR PROGRESSION</div>
         </div>
         <div className="app-nav">
           {nav("Workout", view === "workout", () => setView("workout"))}
