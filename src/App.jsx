@@ -644,7 +644,7 @@ function ProgramBuilder({ programs, editingName, onSave, onClose, exercises = EX
   );
 }
 
-function HistoryView({ history, onSaveAsProgram }) {
+function HistoryView({ history, onSaveAsProgram, onRepeat }) {
   const prKeys = useMemo(() => computePrSetKeys(history), [history]);
   if (!history.length) return <div style={{ textAlign: "center", color: "#707070", padding: "60px 0", fontFamily: "monospace", fontSize: 12 }}>NO SESSIONS LOGGED YET</div>;
   return (
@@ -656,8 +656,9 @@ function HistoryView({ history, onSaveAsProgram }) {
               {s.programName}{s.dayLabel ? ` — DAY ${s.dayLabel}` : ""}
               {s.imported && <span style={{ color: "#707070", fontSize: 9, fontFamily: "monospace", marginLeft: 6, border: "1px solid #383838", borderRadius: 3, padding: "1px 5px" }}>IMPORTED</span>}
             </span>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
               <span style={{ color: "#707070", fontSize: 11, fontFamily: "monospace" }}>{new Date(s.date).toLocaleDateString()}</span>
+              {onRepeat && <button onClick={() => onRepeat(s)} title="Do this workout again (same exercises & weights)" style={{ background: "none", border: "1px solid #3c3c3c", borderRadius: 5, color: "#c8f542", cursor: "pointer", padding: "3px 8px", fontFamily: "monospace", fontSize: 9, fontWeight: 700, letterSpacing: 1 }}>↻ REPEAT</button>}
               {onSaveAsProgram && <button onClick={() => onSaveAsProgram(s)} title="Save this workout as a program day" style={{ background: "none", border: "1px solid #3c3c3c", borderRadius: 5, color: "#7eb8f7", cursor: "pointer", padding: "3px 8px", fontFamily: "monospace", fontSize: 9, fontWeight: 700, letterSpacing: 1 }}>+ PROGRAM</button>}
             </div>
           </div>
@@ -1240,6 +1241,24 @@ export default function App() {
     setView("programs");
   };
 
+  // Load a past session as a fresh custom workout (same exercises and weights),
+  // ready to perform and adjust.
+  const repeatWorkout = (session) => {
+    if (workoutInProgress && !confirm("Discard your current in-progress workout and load this one?")) return;
+    const exercises = sessionToProgramExercises(session, state);
+    const weightOverrides = {};
+    session.exercises.forEach((ex) => {
+      const sets = ex.setsData?.length ? ex.setsData : [];
+      const wm = sets.length ? markWarmups(sets) : [];
+      const work = sets.filter((_, i) => !wm[i]);
+      weightOverrides[ex.name] = work.length ? Math.max(...work.map((s) => s.weight || 0)) : (ex.weight ?? state.weights[ex.name] ?? 0);
+    });
+    setState((s) => ({ ...s, customWorkout: { exercises }, weights: { ...s.weights, ...weightOverrides } }));
+    resetActiveWorkout();
+    setIsCustomMode(true);
+    setView("workout");
+  };
+
   const openExerciseDetail = (name) => { setSelectedExercise(name); setView("exercises"); };
   const updateExerciseSettings = (name, patch) => setState((s) => ({
     ...s,
@@ -1431,7 +1450,7 @@ export default function App() {
             <button onClick={() => setShowImport(true)} style={{ padding: "8px 14px", background: "#1e1e1e", border: "1px solid #3c3c3c", borderRadius: 6, color: "#c8f542", fontFamily: "monospace", fontSize: 11, fontWeight: 700, cursor: "pointer", letterSpacing: 1 }}>↓ IMPORT</button>
           </div>
           <div style={{ fontSize: 9, color: "#707070", fontFamily: "monospace", marginBottom: 14 }}><span style={{ color: PR_COLOR }}>★ gold</span> = a PR when set · <span style={{ color: CUR_PR_COLOR }}>🏆 orange</span> = current record for that lift</div>
-          <HistoryView history={state.history} onSaveAsProgram={openSaveWorkout} />
+          <HistoryView history={state.history} onSaveAsProgram={openSaveWorkout} onRepeat={repeatWorkout} />
         </>}
 
         {view === "exercises" && (
