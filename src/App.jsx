@@ -372,6 +372,32 @@ const hasActiveProgress = (completedSets, warmupDone) =>
   Object.values(warmupDone || {}).some((d) => Object.values(d || {}).some(Boolean));
 
 
+// Numeric input that avoids the controlled-number quirk where leading zeros
+// (e.g. "03") stick around. Manages its own string while focused, strips
+// leading zeros as you type, and selects-all on focus so typing replaces.
+function NumberInput({ value, onChange, integer = false, style, ...rest }) {
+  const [text, setText] = useState(null);
+  const display = text != null ? text : (value === "" || value == null ? "" : String(value));
+  const handleChange = (e) => {
+    const raw = e.target.value.replace(/^(-?)0+(?=\d)/, "$1");
+    setText(raw);
+    const n = integer ? parseInt(raw, 10) : parseFloat(raw);
+    onChange(Number.isFinite(n) ? n : 0);
+  };
+  return (
+    <input
+      type="text"
+      inputMode={integer ? "numeric" : "decimal"}
+      value={display}
+      onChange={handleChange}
+      onFocus={(e) => e.target.select()}
+      onBlur={() => setText(null)}
+      style={style}
+      {...rest}
+    />
+  );
+}
+
 function PlateLoadingDisplay({ weight, barWeight, plates }) {
   if (weight <= 0) return null;
   if (weight < barWeight) return <span style={{ fontSize: 10, fontFamily: "monospace", color: "#909090" }}>bar only</span>;
@@ -422,7 +448,7 @@ function WarmupSection({ workingWeight, equipment, protocol, rounding, initialDo
   );
 }
 
-function SetTracker({ sets, defaultReps, defaultWeight, onUpdate, step = 2.5, initialSets }) {
+function SetTracker({ sets, defaultReps, defaultWeight, onUpdate, initialSets }) {
   const [setsData, setSetsData] = useState(
     () => (initialSets && initialSets.length)
       ? initialSets.map((s) => ({ ...s }))
@@ -485,9 +511,9 @@ function SetTracker({ sets, defaultReps, defaultWeight, onUpdate, step = 2.5, in
         <div key={i} style={{ display: "flex", alignItems: "center", gap: 6, background: set.completed ? "rgba(200,245,66,0.06)" : "#1a1a1a", border: `1px solid ${set.completed ? WORK_COLOR : "#383838"}`, borderLeft: `3px solid ${WORK_COLOR}`, borderRadius: 8, padding: "7px 10px", transition: "all 0.15s" }}>
           <button onClick={() => removeSet(i)} disabled={!canRemove} style={{ width: 26, height: 26, borderRadius: 4, border: "1px solid #383838", background: "transparent", color: canRemove ? "#909090" : "#383838", cursor: canRemove ? "pointer" : "default", fontSize: 15, flexShrink: 0, lineHeight: 1 }}>−</button>
           <span style={{ color: "#707070", fontFamily: "monospace", fontSize: 10, minWidth: 14, textAlign: "center" }}>{i + 1}</span>
-          <input type="number" value={set.weight} min={0} step={step} onChange={(e) => updateField(i, "weight", parseFloat(e.target.value) || 0)} style={{ ...inpStyle, width: 56 }} />
+          <NumberInput value={set.weight} onChange={(n) => updateField(i, "weight", n)} style={{ ...inpStyle, width: 56 }} />
           <span style={{ color: "#707070", fontFamily: "monospace", fontSize: 10 }}>lb×</span>
-          <input type="number" value={set.reps} min={0} onChange={(e) => updateField(i, "reps", parseInt(e.target.value) || 0)} style={{ ...inpStyle, width: 32 }} />
+          <NumberInput integer value={set.reps} onChange={(n) => updateField(i, "reps", n)} style={{ ...inpStyle, width: 32 }} />
           <span style={{ color: "#707070", fontFamily: "monospace", fontSize: 10, flex: 1 }}>r{set.restSec != null && <span style={{ color: "#7eb8f7", marginLeft: 6 }}>· rest {fmtDuration(set.restSec)}</span>}</span>
           <button onClick={() => toggle(i)} style={{ width: 34, height: 34, borderRadius: 6, border: `2px solid ${set.completed ? "#c8f542" : "#4a4a4a"}`, background: set.completed ? "#c8f542" : "transparent", color: set.completed ? "#0a0a0a" : "#4a4a4a", fontSize: 16, cursor: "pointer", transition: "all 0.15s", flexShrink: 0 }}>{set.completed ? "✓" : ""}</button>
         </div>
@@ -547,7 +573,7 @@ function ExerciseCard({ exercise, weight, onWeightChange, onComplete, equipment,
         </div>
       </div>
       {equipment && effWeight > 0 && <div style={{ marginTop: 12 }}><WarmupSection key={on ? "light" : "full"} workingWeight={effWeight} equipment={equipment} protocol={settings?.warmup} rounding={increment} initialDone={warmupDone} onDoneChange={handleWarmupDone} /></div>}
-      <SetTracker sets={exercise.sets} defaultReps={effReps} defaultWeight={effWeight} step={increment} onUpdate={handleUpdate} initialSets={initialSets} />
+      <SetTracker sets={exercise.sets} defaultReps={effReps} defaultWeight={effWeight} onUpdate={handleUpdate} initialSets={initialSets} />
     </div>
   );
 }
@@ -624,10 +650,10 @@ function ProgramBuilder({ programs, editingName, onSave, onClose, exercises = EX
                     </div>
                   </div>
                   <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-                    {[["SETS","sets",1],["REPS","reps",1],["+LB","increment",2.5]].map(([label, field, step]) => (
+                    {[["SETS","sets"],["REPS","reps"],["+LB","increment"]].map(([label, field]) => (
                       <div key={field}>
                         <div style={{ fontSize: 9, color: "#808080", fontFamily: "monospace", marginBottom: 3 }}>{label}</div>
-                        <input type="number" value={ex[field]} min={0} step={step} onChange={(e) => updateField(day.id, ex.name, field, parseFloat(e.target.value) || 0)} style={{ ...inp({ width: 62, textAlign: "center" }) }} />
+                        <NumberInput value={ex[field]} integer={field !== "increment"} onChange={(n) => updateField(day.id, ex.name, field, n)} style={{ ...inp({ width: 62, textAlign: "center" }) }} />
                       </div>
                     ))}
                   </div>
@@ -897,7 +923,7 @@ function ExerciseDetailView({ name, history, settings, onUpdateSettings, onBack 
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
             <button onClick={() => setIncrement(Math.round((settings.increment - 1.25) * 100) / 100)} style={{ width: 30, height: 30, borderRadius: 4, border: "1px solid #3c3c3c", background: "#1e1e1e", color: "#aaa", cursor: "pointer", fontSize: 16 }}>−</button>
-            <input type="number" min={0} step={1.25} value={settings.increment} onChange={(e) => setIncrement(parseFloat(e.target.value) || 0)} style={{ ...inp({ width: 64, fontWeight: 700, color: "#c8f542" }) }} />
+            <NumberInput value={settings.increment} onChange={(n) => setIncrement(n)} style={{ ...inp({ width: 64, fontWeight: 700, color: "#c8f542" }) }} />
             <button onClick={() => setIncrement(Math.round((settings.increment + 1.25) * 100) / 100)} style={{ width: 30, height: 30, borderRadius: 4, border: "1px solid #3c3c3c", background: "#1e1e1e", color: "#aaa", cursor: "pointer", fontSize: 16 }}>+</button>
           </div>
         </div>
@@ -917,11 +943,11 @@ function ExerciseDetailView({ name, history, settings, onUpdateSettings, onBack 
           <div key={i} style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 6 }}>
             <span style={{ width: 32, textAlign: "center", color: "#707070", fontFamily: "monospace", fontSize: 11 }}>{i + 1}</span>
             <div style={{ flex: 1, display: "flex", alignItems: "center", gap: 4 }}>
-              <input type="number" min={0} max={100} step={5} value={Math.round(w.pct * 100)} onChange={(e) => updateWarmupRow(i, "pct", (parseFloat(e.target.value) || 0) / 100)} style={{ ...inp({ width: "100%" }) }} />
+              <NumberInput integer value={Math.round(w.pct * 100)} onChange={(n) => updateWarmupRow(i, "pct", n / 100)} style={{ ...inp({ width: "100%" }) }} />
               <span style={{ color: "#707070", fontFamily: "monospace", fontSize: 11 }}>%</span>
             </div>
             <div style={{ flex: 1 }}>
-              <input type="number" min={1} step={1} value={w.reps} onChange={(e) => updateWarmupRow(i, "reps", parseInt(e.target.value) || 0)} style={{ ...inp({ width: "100%" }) }} />
+              <NumberInput integer value={w.reps} onChange={(n) => updateWarmupRow(i, "reps", n)} style={{ ...inp({ width: "100%" }) }} />
             </div>
             <button onClick={() => removeWarmupRow(i)} disabled={warmup.length <= 1} style={{ width: 30, height: 30, borderRadius: 4, border: "1px solid #3c3c3c", background: "#1e1e1e", color: warmup.length <= 1 ? "#3c3c3c" : "#e05252", cursor: warmup.length <= 1 ? "default" : "pointer", fontSize: 13 }}>✕</button>
           </div>
