@@ -104,13 +104,14 @@ const PR_COLOR = "#ffd54f";      // a set that was a PR when performed
 const CUR_PR_COLOR = "#ff7043";  // the current (most recent) record for a lift
 
 // Determine which sets in a group are warmups. Uses the stored `warmup` flag
-// when present; otherwise falls back to a heuristic where sets lighter than the
-// group's top weight are treated as warmups (for history imported before the
-// flag existed).
+// when present; otherwise falls back to a heuristic: only the leading ramp-up
+// sets (those before the first set at the top weight) are warmups — once a work
+// set is hit, every set after it is a work set, even if lighter.
 function markWarmups(sets) {
   if (sets.some((s) => "warmup" in s)) return sets.map((s) => !!s.warmup);
   const maxW = Math.max(0, ...sets.map((s) => s.weight || 0));
-  return sets.map((s) => (s.weight || 0) < maxW);
+  const firstTop = sets.findIndex((s) => (s.weight || 0) >= maxW);
+  return sets.map((_, i) => i < firstTop);
 }
 
 // Derive program-day exercises ({ name, sets, reps, increment }) from a logged
@@ -448,7 +449,8 @@ function WarmupSection({ workingWeight, equipment, protocol, rounding, initialDo
   );
 }
 
-function SetTracker({ sets, defaultReps, defaultWeight, onUpdate, initialSets }) {
+function SetTracker({ sets, defaultReps, defaultWeight, onUpdate, initialSets, equipment }) {
+  const bar = equipment?.bars.find((b) => b.name === equipment.activeBar) || equipment?.bars[0];
   const [setsData, setSetsData] = useState(
     () => (initialSets && initialSets.length)
       ? initialSets.map((s) => ({ ...s }))
@@ -508,14 +510,17 @@ function SetTracker({ sets, defaultReps, defaultWeight, onUpdate, initialSets })
         </div>
       )}
       {setsData.map((set, i) => (
-        <div key={i} style={{ display: "flex", alignItems: "center", gap: 6, background: set.completed ? "rgba(200,245,66,0.06)" : "#1a1a1a", border: `1px solid ${set.completed ? WORK_COLOR : "#383838"}`, borderLeft: `3px solid ${WORK_COLOR}`, borderRadius: 8, padding: "7px 10px", transition: "all 0.15s" }}>
-          <button onClick={() => removeSet(i)} disabled={!canRemove} style={{ width: 26, height: 26, borderRadius: 4, border: "1px solid #383838", background: "transparent", color: canRemove ? "#909090" : "#383838", cursor: canRemove ? "pointer" : "default", fontSize: 15, flexShrink: 0, lineHeight: 1 }}>−</button>
-          <span style={{ color: "#707070", fontFamily: "monospace", fontSize: 10, minWidth: 14, textAlign: "center" }}>{i + 1}</span>
-          <NumberInput value={set.weight} onChange={(n) => updateField(i, "weight", n)} style={{ ...inpStyle, width: 56 }} />
-          <span style={{ color: "#707070", fontFamily: "monospace", fontSize: 10 }}>lb×</span>
-          <NumberInput integer value={set.reps} onChange={(n) => updateField(i, "reps", n)} style={{ ...inpStyle, width: 32 }} />
-          <span style={{ color: "#707070", fontFamily: "monospace", fontSize: 10, flex: 1 }}>r{set.restSec != null && <span style={{ color: "#7eb8f7", marginLeft: 6 }}>· rest {fmtDuration(set.restSec)}</span>}</span>
-          <button onClick={() => toggle(i)} style={{ width: 34, height: 34, borderRadius: 6, border: `2px solid ${set.completed ? "#c8f542" : "#4a4a4a"}`, background: set.completed ? "#c8f542" : "transparent", color: set.completed ? "#0a0a0a" : "#4a4a4a", fontSize: 16, cursor: "pointer", transition: "all 0.15s", flexShrink: 0 }}>{set.completed ? "✓" : ""}</button>
+        <div key={i} style={{ background: set.completed ? "rgba(200,245,66,0.06)" : "#1a1a1a", border: `1px solid ${set.completed ? WORK_COLOR : "#383838"}`, borderLeft: `3px solid ${WORK_COLOR}`, borderRadius: 8, padding: "7px 10px", transition: "all 0.15s" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <button onClick={() => removeSet(i)} disabled={!canRemove} style={{ width: 26, height: 26, borderRadius: 4, border: "1px solid #383838", background: "transparent", color: canRemove ? "#909090" : "#383838", cursor: canRemove ? "pointer" : "default", fontSize: 15, flexShrink: 0, lineHeight: 1 }}>−</button>
+            <span style={{ color: "#707070", fontFamily: "monospace", fontSize: 10, minWidth: 14, textAlign: "center" }}>{i + 1}</span>
+            <NumberInput value={set.weight} onChange={(n) => updateField(i, "weight", n)} style={{ ...inpStyle, width: 56 }} />
+            <span style={{ color: "#707070", fontFamily: "monospace", fontSize: 10 }}>lb×</span>
+            <NumberInput integer value={set.reps} onChange={(n) => updateField(i, "reps", n)} style={{ ...inpStyle, width: 32 }} />
+            <span style={{ color: "#707070", fontFamily: "monospace", fontSize: 10, flex: 1 }}>r{set.restSec != null && <span style={{ color: "#7eb8f7", marginLeft: 6 }}>· rest {fmtDuration(set.restSec)}</span>}</span>
+            <button onClick={() => toggle(i)} style={{ width: 34, height: 34, borderRadius: 6, border: `2px solid ${set.completed ? "#c8f542" : "#4a4a4a"}`, background: set.completed ? "#c8f542" : "transparent", color: set.completed ? "#0a0a0a" : "#4a4a4a", fontSize: 16, cursor: "pointer", transition: "all 0.15s", flexShrink: 0 }}>{set.completed ? "✓" : ""}</button>
+          </div>
+          {bar && set.weight > 0 && <div style={{ paddingLeft: 46, marginTop: 4 }}><PlateLoadingDisplay weight={set.weight} barWeight={bar.weight} plates={equipment.plates} /></div>}
         </div>
       ))}
       <button onClick={addSet} style={{ width: "100%", padding: "6px 0", background: "transparent", border: "1px dashed #3c3c3c", borderRadius: 6, color: "#808080", cursor: "pointer", fontFamily: "monospace", fontSize: 10, letterSpacing: 1 }}>+ ADD SET</button>
@@ -528,7 +533,6 @@ function ExerciseCard({ exercise, weight, onWeightChange, onComplete, equipment,
   const [done, setDone] = useState(initialDone);
   const lib = EXERCISE_LIBRARY.find((e) => e.name === exercise.name);
   const catColor = lib ? CATEGORY_COLORS[lib.category] : "#888";
-  const bar = equipment?.bars.find((b) => b.name === equipment.activeBar) || equipment?.bars[0];
   const increment = settings?.increment ?? exercise.increment;
   const handleUpdate = useCallback((isDone, setsData) => {
     setDone(isDone);
@@ -569,11 +573,10 @@ function ExerciseCard({ exercise, weight, onWeightChange, onComplete, equipment,
             </div>
             <button onClick={() => onWeightChange(weight + increment)} style={{ width: 32, height: 32, borderRadius: 4, border: "1px solid #3c3c3c", background: "#1e1e1e", color: "#aaa", cursor: "pointer", fontSize: 18 }}>+</button>
           </div>
-          {bar && weight > 0 && <PlateLoadingDisplay weight={weight} barWeight={bar.weight} plates={equipment.plates} />}
         </div>
       </div>
       {equipment && effWeight > 0 && <div style={{ marginTop: 12 }}><WarmupSection key={on ? "light" : "full"} workingWeight={effWeight} equipment={equipment} protocol={settings?.warmup} rounding={increment} initialDone={warmupDone} onDoneChange={handleWarmupDone} /></div>}
-      <SetTracker sets={exercise.sets} defaultReps={effReps} defaultWeight={effWeight} onUpdate={handleUpdate} initialSets={initialSets} />
+      <SetTracker sets={exercise.sets} defaultReps={effReps} defaultWeight={effWeight} onUpdate={handleUpdate} initialSets={initialSets} equipment={equipment} />
     </div>
   );
 }
