@@ -216,6 +216,15 @@ function calcWarmupSets(workingWeight, barWeight, protocol = WARMUP_PROTOCOL, ro
 }
 
 const CATEGORY_COLORS = { Lower: "#7eb8f7", Upper: "#c8f542", Power: "#f7a07e" };
+
+// Major lifts shown on the Records page. `names` lists aliases so PRs are found
+// across naming variants (e.g. imported "Strict Military Press").
+const MAJOR_LIFTS = [
+  { label: "Squat", names: ["Squat"] },
+  { label: "Bench Press", names: ["Bench Press"] },
+  { label: "Deadlift", names: ["Deadlift"] },
+  { label: "Strict Press", names: ["Overhead Press", "Strict Military Press", "Strict Press", "Military Press"] },
+];
 const uid = () => Math.random().toString(36).slice(2, 9);
 
 // Format a duration in seconds as m:ss.
@@ -711,6 +720,36 @@ function HistoryView({ history, onSaveAsProgram, onRepeat }) {
           ))}
         </div>
       ))}
+    </div>
+  );
+}
+
+function RecordsView({ history }) {
+  return (
+    <div>
+      <div style={{ fontSize: 22, fontWeight: 900, letterSpacing: 2, marginBottom: 6 }}>RECORDS</div>
+      <div style={{ fontSize: 11, color: "#707070", fontFamily: "monospace", marginBottom: 18 }}>current single-rep & 5-rep PRs for the major lifts</div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        {MAJOR_LIFTS.map((lift) => {
+          let single = null, five = null, catColor = "#9a9a9a";
+          lift.names.forEach((nm) => {
+            const libCat = EXERCISE_LIBRARY.find((e) => e.name === nm)?.category;
+            if (libCat && CATEGORY_COLORS[libCat]) catColor = CATEGORY_COLORS[libCat];
+            const st = getExerciseStats(history, nm);
+            if (st.heaviestSingle && (!single || st.heaviestSingle.weight > single.weight)) single = st.heaviestSingle;
+            if (st.topFive && (!five || st.topFive.weight > five.weight)) five = st.topFive;
+          });
+          return (
+            <div key={lift.label} style={{ background: "#181818", border: "1px solid #383838", borderLeft: `3px solid ${catColor}`, borderRadius: 10, padding: "14px 16px" }}>
+              <div style={{ fontSize: 16, fontWeight: 800, color: "#e8e8e8", marginBottom: 10 }}>{lift.label}</div>
+              <div style={{ display: "flex", gap: 10 }}>
+                <PrCard label="HEAVIEST SINGLE" value={single ? `${single.weight}lb` : ""} sub={single ? new Date(single.date).toLocaleDateString() : "no 1-rep sets logged"} />
+                <PrCard label="TOP SET OF 5" value={five ? `${five.weight}lb` : ""} sub={five ? new Date(five.date).toLocaleDateString() : "no 5-rep sets logged"} />
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -1412,6 +1451,7 @@ export default function App() {
         <div className="app-nav">
           {nav("Workout", view === "workout", () => setView("workout"))}
           {nav("Exercises", view === "exercises", () => { setSelectedExercise(null); setView("exercises"); })}
+          {nav("Records", view === "records", () => setView("records"))}
           {nav("History", view === "history", () => setView("history"))}
           {nav("Programs", view === "programs", () => setView("programs"))}
           {nav("Equipment", view === "equipment", () => setView("equipment"))}
@@ -1506,6 +1546,8 @@ export default function App() {
                 })}
               </>
         )}
+
+        {view === "records" && <RecordsView history={state.history} />}
 
         {view === "equipment" && <EquipmentView equipment={state.equipment} onUpdate={updateEquipment} />}
 
