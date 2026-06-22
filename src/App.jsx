@@ -427,11 +427,13 @@ function PlateLoadingDisplay({ weight, barWeight, plates }) {
 function WarmupSection({ workingWeight, equipment, protocol, rounding, initialDone, onDoneChange }) {
   const [open, setOpen] = useState(true);
   const [done, setDone] = useState(() => initialDone || {});
+  const [repsOverride, setRepsOverride] = useState({});
   useEffect(() => { onDoneChange?.(done); }, [done, onDoneChange]);
   const bar = equipment.bars.find((b) => b.name === equipment.activeBar) || equipment.bars[0];
   const sets = calcWarmupSets(workingWeight, bar.weight, protocol, rounding);
   const toggle = (i) => setDone((d) => ({ ...d, [i]: !d[i] }));
   const doneCount = sets.filter((_, i) => done[i]).length;
+  const repInp = { background: "#111", border: "1px solid #3c3c3c", borderRadius: 4, color: "#e0e0e0", textAlign: "center", fontSize: 12, fontWeight: 700, padding: "2px 0", fontFamily: "monospace", width: 30, outline: "none" };
   return (
     <div style={{ marginBottom: 10 }}>
       <button onClick={() => setOpen((o) => !o)} style={{ background: "none", border: `1px solid ${WARMUP_COLOR}55`, borderRadius: 4, color: WARMUP_COLOR, cursor: "pointer", fontFamily: "monospace", fontSize: 9, padding: "4px 10px", letterSpacing: 1 }}>
@@ -441,10 +443,12 @@ function WarmupSection({ workingWeight, equipment, protocol, rounding, initialDo
         <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 4 }}>
           {sets.map(({ pct, reps, weight, barOnly }, i) => (
             <div key={i} style={{ background: done[i] ? "rgba(244,143,177,0.08)" : "#1d1d1d", border: `1px solid ${done[i] ? WARMUP_COLOR : "#383838"}`, borderLeft: `3px solid ${WARMUP_COLOR}`, borderRadius: 6, padding: "7px 10px 7px 12px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, transition: "all 0.15s" }}>
-              <div style={{ display: "flex", gap: 12, alignItems: "center", minWidth: 0 }}>
+              <div style={{ display: "flex", gap: 8, alignItems: "center", minWidth: 0 }}>
                 <span style={{ color: WARMUP_COLOR, fontFamily: "monospace", fontSize: 10, minWidth: 28 }}>{barOnly ? "BAR" : `${Math.round(pct * 100)}%`}</span>
-                <span style={{ color: "#999", fontFamily: "monospace", fontSize: 10 }}>{reps}r</span>
                 <span style={{ color: "#c0c0c0", fontWeight: 700, fontSize: 13 }}>{weight}lb</span>
+                <span style={{ color: "#707070", fontFamily: "monospace", fontSize: 10 }}>×</span>
+                <NumberInput integer value={repsOverride[i] ?? reps} onChange={(n) => setRepsOverride((r) => ({ ...r, [i]: n }))} style={repInp} />
+                <span style={{ color: "#707070", fontFamily: "monospace", fontSize: 10 }}>r</span>
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <PlateLoadingDisplay weight={weight} barWeight={bar.weight} plates={equipment.plates} />
