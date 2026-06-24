@@ -912,7 +912,7 @@ function ExerciseChart({ sessions }) {
   const cutoff = days ? maxDate - days * 86400000 : -Infinity;
   const data = useMemo(() => points.filter((p) => p.date >= cutoff), [points, cutoff]);
 
-  const VBW = 620, VBH = 240, padL = 46, padR = 14, padT = 16, padB = 28;
+  const VBW = 620, VBH = 330, padL = 46, padR = 14, padT = 16, padB = 28;
   const plotW = VBW - padL - padR, plotH = VBH - padT - padB;
   const values = data.map((p) => p.value);
   const vMin = Math.min(...values), vMax = Math.max(...values);
@@ -923,7 +923,8 @@ function ExerciseChart({ sessions }) {
   const yOf = (v) => padT + (1 - (v - yMin) / (yMax - yMin)) * plotH;
 
   const selPoint = sel != null ? data[sel] : null;
-  const pickNearest = (e) => {
+  const dragging = useRef(false);
+  const scrub = (e) => {
     if (!data.length) return;
     const rect = e.currentTarget.getBoundingClientRect();
     const vbX = (e.clientX - rect.left) * (VBW / rect.width);
@@ -931,6 +932,9 @@ function ExerciseChart({ sessions }) {
     data.forEach((p, i) => { const d = Math.abs(xOf(p.date) - vbX); if (d < bestD) { bestD = d; best = i; } });
     setSel(best);
   };
+  const startScrub = (e) => { dragging.current = true; e.currentTarget.setPointerCapture?.(e.pointerId); scrub(e); };
+  const moveScrub = (e) => { if (dragging.current) scrub(e); };
+  const endScrub = () => { dragging.current = false; };
 
   const yTicks = Array.from({ length: 4 }, (_, i) => yMin + (yMax - yMin) * i / 3);
   const xTickCount = Math.min(5, Math.max(data.length, 1));
@@ -960,7 +964,7 @@ function ExerciseChart({ sessions }) {
 
       {data.length === 0
         ? <div style={{ textAlign: "center", color: "#707070", padding: "30px 0", fontFamily: "monospace", fontSize: 12 }}>NO DATA IN THIS RANGE</div>
-        : <svg viewBox={`0 0 ${VBW} ${VBH}`} onClick={pickNearest} style={{ width: "100%", height: "auto", display: "block", background: "#1c1c1c", border: "1px solid #383838", borderRadius: 10, cursor: "pointer", touchAction: "manipulation" }}>
+        : <svg viewBox={`0 0 ${VBW} ${VBH}`} onPointerDown={startScrub} onPointerMove={moveScrub} onPointerUp={endScrub} onPointerCancel={endScrub} style={{ width: "100%", height: "auto", display: "block", background: "#1c1c1c", border: "1px solid #383838", borderRadius: 10, cursor: "pointer", touchAction: "none", userSelect: "none" }}>
             {yTicks.map((t, i) => (
               <g key={i}>
                 <line x1={padL} y1={yOf(t)} x2={VBW - padR} y2={yOf(t)} stroke="#2a2a2a" strokeWidth="1" />
