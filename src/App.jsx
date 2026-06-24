@@ -686,44 +686,116 @@ function ProgramBuilder({ programs, editingName, onSave, onClose, exercises = EX
   );
 }
 
+function SessionCard({ session: s, prKeys, onSaveAsProgram, onRepeat }) {
+  return (
+    <div style={{ background: "#1c1c1c", border: "1px solid #383838", borderRadius: 10, padding: "14px 18px" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, gap: 8 }}>
+        <span style={{ color: "#c8f542", fontWeight: 700, fontSize: 14 }}>
+          {s.programName}{s.dayLabel ? ` — DAY ${s.dayLabel}` : ""}
+          {s.imported && <span style={{ color: "#707070", fontSize: 9, fontFamily: "monospace", marginLeft: 6, border: "1px solid #383838", borderRadius: 3, padding: "1px 5px" }}>IMPORTED</span>}
+        </span>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+          <span style={{ color: "#707070", fontSize: 11, fontFamily: "monospace" }}>{new Date(s.date).toLocaleDateString()}</span>
+          {onRepeat && <button onClick={() => onRepeat(s)} title="Do this workout again (same exercises & weights)" style={{ background: "none", border: "1px solid #3c3c3c", borderRadius: 5, color: "#c8f542", cursor: "pointer", padding: "3px 8px", fontFamily: "monospace", fontSize: 9, fontWeight: 700, letterSpacing: 1 }}>↻ REPEAT</button>}
+          {onSaveAsProgram && <button onClick={() => onSaveAsProgram(s)} title="Save this workout as a program day" style={{ background: "none", border: "1px solid #3c3c3c", borderRadius: 5, color: "#7eb8f7", cursor: "pointer", padding: "3px 8px", fontFamily: "monospace", fontSize: 9, fontWeight: 700, letterSpacing: 1 }}>+ PROGRAM</button>}
+        </div>
+      </div>
+      {s.exercises.map((ex) => (
+        <div key={ex.name} style={{ marginBottom: 4 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, fontFamily: "monospace" }}>
+            <span style={{ color: "#aaa" }}>{ex.name}</span>
+            {!ex.setsData?.length && <span style={{ color: "#808080" }}>{ex.sets}×{ex.reps} @ {ex.weight}lb</span>}
+          </div>
+          {ex.setsData?.length > 0 && (() => { const wm = markWarmups(ex.setsData); return (
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 3 }}>
+              {ex.setsData.map((set, si) => {
+                const info = prInfo(prKeys.get(`${s.date}|${ex.name}|${si}`));
+                const c = info ? info.color : (wm[si] ? WARMUP_COLOR : WORK_COLOR);
+                return (
+                <span key={si} title={info ? info.label : `${wm[si] ? "warmup" : "work"} set${set.restSec != null ? ` · ${fmtDuration(set.restSec)} rest before` : ""}`} style={{ fontSize: 10, fontFamily: "monospace", color: c, background: `${c}${info ? "22" : "14"}`, border: `1px solid ${info ? c : `${c}33`}`, borderRadius: 4, padding: "2px 6px", fontWeight: info ? 700 : 400, boxShadow: info ? `0 0 ${info.isCur ? 8 : 6}px ${c}${info.isCur ? "99" : "55"}` : "none" }}>{info && (info.isCur ? "🏆 " : "★ ")}{set.weight}lb×{set.reps}{set.restSec != null && <span style={{ color: "#5a7ea6" }}> ⏱{fmtDuration(set.restSec)}</span>}</span>
+              ); })}
+            </div>
+          ); })()}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function HistoryView({ history, onSaveAsProgram, onRepeat }) {
   const prKeys = useMemo(() => computePrSetKeys(history), [history]);
   if (!history.length) return <div style={{ textAlign: "center", color: "#707070", padding: "60px 0", fontFamily: "monospace", fontSize: 12 }}>NO SESSIONS LOGGED YET</div>;
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-      {[...history].reverse().map((s, i) => (
-        <div key={i} style={{ background: "#1c1c1c", border: "1px solid #383838", borderRadius: 10, padding: "14px 18px" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, gap: 8 }}>
-            <span style={{ color: "#c8f542", fontWeight: 700, fontSize: 14 }}>
-              {s.programName}{s.dayLabel ? ` — DAY ${s.dayLabel}` : ""}
-              {s.imported && <span style={{ color: "#707070", fontSize: 9, fontFamily: "monospace", marginLeft: 6, border: "1px solid #383838", borderRadius: 3, padding: "1px 5px" }}>IMPORTED</span>}
-            </span>
-            <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
-              <span style={{ color: "#707070", fontSize: 11, fontFamily: "monospace" }}>{new Date(s.date).toLocaleDateString()}</span>
-              {onRepeat && <button onClick={() => onRepeat(s)} title="Do this workout again (same exercises & weights)" style={{ background: "none", border: "1px solid #3c3c3c", borderRadius: 5, color: "#c8f542", cursor: "pointer", padding: "3px 8px", fontFamily: "monospace", fontSize: 9, fontWeight: 700, letterSpacing: 1 }}>↻ REPEAT</button>}
-              {onSaveAsProgram && <button onClick={() => onSaveAsProgram(s)} title="Save this workout as a program day" style={{ background: "none", border: "1px solid #3c3c3c", borderRadius: 5, color: "#7eb8f7", cursor: "pointer", padding: "3px 8px", fontFamily: "monospace", fontSize: 9, fontWeight: 700, letterSpacing: 1 }}>+ PROGRAM</button>}
-            </div>
-          </div>
-          {s.exercises.map((ex) => (
-            <div key={ex.name} style={{ marginBottom: 4 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, fontFamily: "monospace" }}>
-                <span style={{ color: "#aaa" }}>{ex.name}</span>
-                {!ex.setsData?.length && <span style={{ color: "#808080" }}>{ex.sets}×{ex.reps} @ {ex.weight}lb</span>}
-              </div>
-              {ex.setsData?.length > 0 && (() => { const wm = markWarmups(ex.setsData); return (
-                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 3 }}>
-                  {ex.setsData.map((set, si) => {
-                    const info = prInfo(prKeys.get(`${s.date}|${ex.name}|${si}`));
-                    const c = info ? info.color : (wm[si] ? WARMUP_COLOR : WORK_COLOR);
-                    return (
-                    <span key={si} title={info ? info.label : `${wm[si] ? "warmup" : "work"} set${set.restSec != null ? ` · ${fmtDuration(set.restSec)} rest before` : ""}`} style={{ fontSize: 10, fontFamily: "monospace", color: c, background: `${c}${info ? "22" : "14"}`, border: `1px solid ${info ? c : `${c}33`}`, borderRadius: 4, padding: "2px 6px", fontWeight: info ? 700 : 400, boxShadow: info ? `0 0 ${info.isCur ? 8 : 6}px ${c}${info.isCur ? "99" : "55"}` : "none" }}>{info && (info.isCur ? "🏆 " : "★ ")}{set.weight}lb×{set.reps}{set.restSec != null && <span style={{ color: "#5a7ea6" }}> ⏱{fmtDuration(set.restSec)}</span>}</span>
-                  ); })}
-                </div>
-              ); })()}
-            </div>
-          ))}
-        </div>
-      ))}
+      {[...history].reverse().map((s, i) => <SessionCard key={i} session={s} prKeys={prKeys} onSaveAsProgram={onSaveAsProgram} onRepeat={onRepeat} />)}
+    </div>
+  );
+}
+
+const CAL_WEEKDAYS = ["S", "M", "T", "W", "T", "F", "S"];
+const CAL_MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+const calToday = () => { const d = new Date(); return { y: d.getFullYear(), m: d.getMonth(), d: d.getDate() }; };
+
+// Month calendar of past workouts. Days with workouts are marked; tapping one
+// shows that day's session details below.
+function CalendarView({ history, onSaveAsProgram, onRepeat }) {
+  const prKeys = useMemo(() => computePrSetKeys(history), [history]);
+  const byDay = useMemo(() => {
+    const m = {};
+    (history || []).forEach((s) => { const d = new Date(s.date); const k = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`; (m[k] = m[k] || []).push(s); });
+    return m;
+  }, [history]);
+  const [today] = useState(calToday);
+  const [{ y, m }, setYM] = useState(() => {
+    if (history && history.length) { const d = new Date(history[history.length - 1].date); return { y: d.getFullYear(), m: d.getMonth() }; }
+    return { y: today.y, m: today.m };
+  });
+  const [selKey, setSelKey] = useState(null);
+
+  if (!history.length) return <div style={{ textAlign: "center", color: "#707070", padding: "60px 0", fontFamily: "monospace", fontSize: 12 }}>NO SESSIONS LOGGED YET</div>;
+
+  const move = (dir) => { setSelKey(null); setYM(({ y, m }) => { let nm = m + dir, ny = y; if (nm < 0) { nm = 11; ny--; } if (nm > 11) { nm = 0; ny++; } return { y: ny, m: nm }; }); };
+  const firstDow = new Date(y, m, 1).getDay();
+  const daysInMonth = new Date(y, m + 1, 0).getDate();
+  const cells = [];
+  for (let i = 0; i < firstDow; i++) cells.push(null);
+  for (let d = 1; d <= daysInMonth; d++) cells.push(d);
+  const selSessions = selKey ? byDay[selKey] || [] : [];
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+        <button onClick={() => move(-1)} style={{ background: "#1d1d1d", border: "1px solid #3c3c3c", borderRadius: 6, color: "#aaa", cursor: "pointer", padding: "6px 14px", fontSize: 16 }}>‹</button>
+        <div style={{ fontSize: 15, fontWeight: 800, letterSpacing: 1, color: "#e8e8e8" }}>{CAL_MONTHS[m]} {y}</div>
+        <button onClick={() => move(1)} style={{ background: "#1d1d1d", border: "1px solid #3c3c3c", borderRadius: 6, color: "#aaa", cursor: "pointer", padding: "6px 14px", fontSize: 16 }}>›</button>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 4 }}>
+        {CAL_WEEKDAYS.map((w, i) => <div key={i} style={{ textAlign: "center", fontSize: 9, color: "#707070", fontFamily: "monospace", paddingBottom: 2 }}>{w}</div>)}
+        {cells.map((d, i) => {
+          if (d == null) return <div key={i} />;
+          const k = `${y}-${m}-${d}`;
+          const has = !!byDay[k];
+          const isToday = today.y === y && today.m === m && today.d === d;
+          const isSel = selKey === k;
+          return (
+            <button key={i} onClick={() => has && setSelKey(isSel ? null : k)} disabled={!has}
+              style={{ aspectRatio: "1", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 2, borderRadius: 8,
+                border: `1px solid ${isSel ? "#c8f542" : isToday ? "#7eb8f7" : "#262626"}`,
+                background: has ? (isSel ? "rgba(200,245,66,0.16)" : "rgba(200,245,66,0.07)") : "#161616",
+                color: has ? "#e8e8e8" : "#555", cursor: has ? "pointer" : "default", fontSize: 13, fontWeight: has ? 700 : 400, fontFamily: "monospace", padding: 0 }}>
+              {d}
+              {has && <span style={{ display: "flex", gap: 2 }}>{byDay[k].slice(0, 3).map((_, j) => <span key={j} style={{ width: 4, height: 4, borderRadius: "50%", background: "#c8f542" }} />)}</span>}
+            </button>
+          );
+        })}
+      </div>
+
+      <div style={{ marginTop: 16, display: "flex", flexDirection: "column", gap: 10 }}>
+        {selSessions.length > 0
+          ? selSessions.map((s, i) => <SessionCard key={i} session={s} prKeys={prKeys} onSaveAsProgram={onSaveAsProgram} onRepeat={onRepeat} />)
+          : <div style={{ textAlign: "center", color: "#707070", padding: "24px 0", fontFamily: "monospace", fontSize: 11 }}>tap a highlighted day to see that workout</div>}
+      </div>
     </div>
   );
 }
@@ -1291,6 +1363,7 @@ export default function App() {
   const [showImport, setShowImport] = useState(false);
   const [prCelebration, setPrCelebration] = useState(null);
   const [saveSession, setSaveSession] = useState(null);
+  const [historyMode, setHistoryMode] = useState("list");
 
   const importHistory = (sessions, latestWeights) => {
     setState((s) => ({
@@ -1518,12 +1591,19 @@ export default function App() {
         </>}
 
         {view === "history" && <>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-            <div style={{ fontSize: 22, fontWeight: 900, letterSpacing: 2 }}>SESSION HISTORY</div>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+            <div style={{ fontSize: 22, fontWeight: 900, letterSpacing: 2 }}>HISTORY</div>
             <button onClick={() => setShowImport(true)} style={{ padding: "8px 14px", background: "#1e1e1e", border: "1px solid #3c3c3c", borderRadius: 6, color: "#c8f542", fontFamily: "monospace", fontSize: 11, fontWeight: 700, cursor: "pointer", letterSpacing: 1 }}>↓ IMPORT</button>
           </div>
+          <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+            {[["list", "LIST"], ["calendar", "CALENDAR"]].map(([mode, label]) => (
+              <button key={mode} onClick={() => setHistoryMode(mode)} style={{ flex: 1, padding: "7px 8px", borderRadius: 6, border: `1px solid ${historyMode === mode ? "#c8f542" : "#3c3c3c"}`, background: historyMode === mode ? "rgba(200,245,66,0.1)" : "#1d1d1d", color: historyMode === mode ? "#c8f542" : "#909090", fontFamily: "monospace", fontSize: 11, fontWeight: 700, cursor: "pointer", letterSpacing: 1 }}>{label}</button>
+            ))}
+          </div>
           <div style={{ fontSize: 9, color: "#707070", fontFamily: "monospace", marginBottom: 14 }}><span style={{ color: PR_COLOR }}>★ gold</span> = a PR when set · <span style={{ color: CUR_PR_COLOR }}>🏆 orange</span> = current record for that lift</div>
-          <HistoryView history={state.history} onSaveAsProgram={openSaveWorkout} onRepeat={repeatWorkout} />
+          {historyMode === "calendar"
+            ? <CalendarView history={state.history} onSaveAsProgram={openSaveWorkout} onRepeat={repeatWorkout} />
+            : <HistoryView history={state.history} onSaveAsProgram={openSaveWorkout} onRepeat={repeatWorkout} />}
         </>}
 
         {view === "exercises" && (
