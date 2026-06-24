@@ -750,17 +750,29 @@ function CalendarView({ history, onSaveAsProgram, onRepeat }) {
     if (history && history.length) { const d = new Date(history[history.length - 1].date); return { y: d.getFullYear(), m: d.getMonth() }; }
     return { y: today.y, m: today.m };
   });
-  const [selKey, setSelKey] = useState(null);
+  const [popover, setPopover] = useState(null);
 
   if (!history.length) return <div style={{ textAlign: "center", color: "#707070", padding: "60px 0", fontFamily: "monospace", fontSize: 12 }}>NO SESSIONS LOGGED YET</div>;
 
-  const move = (dir) => { setSelKey(null); setYM(({ y, m }) => { let nm = m + dir, ny = y; if (nm < 0) { nm = 11; ny--; } if (nm > 11) { nm = 0; ny++; } return { y: ny, m: nm }; }); };
+  const move = (dir) => { setPopover(null); setYM(({ y, m }) => { let nm = m + dir, ny = y; if (nm < 0) { nm = 11; ny--; } if (nm > 11) { nm = 0; ny++; } return { y: ny, m: nm }; }); };
+  const openDay = (e, k) => {
+    if (popover?.key === k) { setPopover(null); return; }
+    const r = e.currentTarget.getBoundingClientRect();
+    const vw = window.innerWidth, vh = window.innerHeight;
+    const width = Math.min(340, vw - 24);
+    const left = Math.max(12, Math.min(r.left + r.width / 2 - width / 2, vw - width - 12));
+    const below = r.bottom < vh * 0.5;
+    setPopover({
+      key: k, left, width, below,
+      arrowLeft: Math.max(14, Math.min(r.left + r.width / 2 - left, width - 14)),
+      ...(below ? { top: r.bottom + 10, maxHeight: vh - r.bottom - 28 } : { bottom: vh - r.top + 10, maxHeight: r.top - 28 }),
+    });
+  };
   const firstDow = new Date(y, m, 1).getDay();
   const daysInMonth = new Date(y, m + 1, 0).getDate();
   const cells = [];
   for (let i = 0; i < firstDow; i++) cells.push(null);
   for (let d = 1; d <= daysInMonth; d++) cells.push(d);
-  const selSessions = selKey ? byDay[selKey] || [] : [];
 
   return (
     <div>
@@ -777,9 +789,9 @@ function CalendarView({ history, onSaveAsProgram, onRepeat }) {
           const k = `${y}-${m}-${d}`;
           const has = !!byDay[k];
           const isToday = today.y === y && today.m === m && today.d === d;
-          const isSel = selKey === k;
+          const isSel = popover?.key === k;
           return (
-            <button key={i} onClick={() => has && setSelKey(isSel ? null : k)} disabled={!has}
+            <button key={i} onClick={(e) => has && openDay(e, k)} disabled={!has}
               style={{ aspectRatio: "1", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 2, borderRadius: 8,
                 border: `1px solid ${isSel ? "#c8f542" : isToday ? "#7eb8f7" : "#262626"}`,
                 background: has ? (isSel ? "rgba(200,245,66,0.16)" : "rgba(200,245,66,0.07)") : "#161616",
@@ -791,11 +803,15 @@ function CalendarView({ history, onSaveAsProgram, onRepeat }) {
         })}
       </div>
 
-      <div style={{ marginTop: 16, display: "flex", flexDirection: "column", gap: 10 }}>
-        {selSessions.length > 0
-          ? selSessions.map((s, i) => <SessionCard key={i} session={s} prKeys={prKeys} onSaveAsProgram={onSaveAsProgram} onRepeat={onRepeat} />)
-          : <div style={{ textAlign: "center", color: "#707070", padding: "24px 0", fontFamily: "monospace", fontSize: 11 }}>tap a highlighted day to see that workout</div>}
-      </div>
+      {popover && (() => { const sessions = byDay[popover.key] || []; return (
+        <>
+          <div onClick={() => setPopover(null)} style={{ position: "fixed", inset: 0, zIndex: 120 }} />
+          <div style={{ position: "fixed", left: popover.left, width: popover.width, ...(popover.below ? { top: popover.top } : { bottom: popover.bottom }), maxHeight: popover.maxHeight, overflowY: "auto", zIndex: 121, background: "#161616", border: "1px solid #c8f542", borderRadius: 12, padding: 10, boxShadow: "0 10px 34px rgba(0,0,0,0.7)", display: "flex", flexDirection: "column", gap: 8 }}>
+            <div style={{ position: "absolute", left: popover.arrowLeft - 7, width: 0, height: 0, borderLeft: "7px solid transparent", borderRight: "7px solid transparent", ...(popover.below ? { top: -7, borderBottom: "7px solid #c8f542" } : { bottom: -7, borderTop: "7px solid #c8f542" }) }} />
+            {sessions.map((s, i) => <SessionCard key={i} session={s} prKeys={prKeys} onSaveAsProgram={onSaveAsProgram ? (x) => { setPopover(null); onSaveAsProgram(x); } : undefined} onRepeat={onRepeat ? (x) => { setPopover(null); onRepeat(x); } : undefined} />)}
+          </div>
+        </>
+      ); })()}
     </div>
   );
 }
