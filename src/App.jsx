@@ -382,6 +382,12 @@ const loadActive = () => {
 const hasActiveProgress = (completedSets, warmupDone) =>
   Object.values(completedSets || {}).some((c) => c?.sets?.some((s) => s.completed)) ||
   Object.values(warmupDone || {}).some((d) => Object.values(d || {}).some(Boolean));
+// Earliest completed-set timestamp = when the workout started (null if unknown).
+const workoutStartTime = (completedSets) => {
+  let min = Infinity;
+  Object.values(completedSets || {}).forEach((c) => c?.sets?.forEach((s) => { if (s.completedAt && s.completedAt < min) min = s.completedAt; }));
+  return Number.isFinite(min) ? min : null;
+};
 
 
 // Numeric input that avoids the controlled-number quirk where leading zeros
@@ -848,7 +854,7 @@ function RecordsView({ history }) {
   );
 }
 
-function EquipmentView({ equipment, onUpdate }) {
+function EquipmentView({ equipment, onUpdate, notifPermission, onEnableNotifications }) {
   const updateBar = (name) => onUpdate({ ...equipment, activeBar: name });
   const updateCount = (weight, delta) => onUpdate({
     ...equipment,
@@ -884,6 +890,22 @@ function EquipmentView({ equipment, onUpdate }) {
             </div>
           </div>
         ))}
+      </div>
+
+      <div style={{ marginTop: 24 }}>
+        <div style={{ fontSize: 10, color: "#808080", fontFamily: "monospace", letterSpacing: 1, marginBottom: 8 }}>WORKOUT NOTIFICATION</div>
+        <div style={{ background: "#1c1c1c", border: "1px solid #383838", borderRadius: 8, padding: "12px 14px" }}>
+          <div style={{ fontSize: 11, color: "#909090", fontFamily: "monospace", lineHeight: 1.6, marginBottom: 10 }}>
+            Show an ongoing notification with the elapsed time while a workout is in progress. The timer updates while the app is open.
+          </div>
+          {notifPermission === "unsupported"
+            ? <div style={{ fontSize: 11, color: "#707070", fontFamily: "monospace" }}>Not supported on this browser.</div>
+            : notifPermission === "granted"
+              ? <div style={{ fontSize: 12, color: "#c8f542", fontFamily: "monospace", fontWeight: 700 }}>✓ Enabled</div>
+              : notifPermission === "denied"
+                ? <div style={{ fontSize: 11, color: "#e0a252", fontFamily: "monospace" }}>Blocked — enable notifications for this site in your browser settings.</div>
+                : <button onClick={onEnableNotifications} style={{ padding: "9px 16px", background: "#c8f542", border: "none", borderRadius: 6, color: "#0a0a0a", fontWeight: 900, fontSize: 12, cursor: "pointer", letterSpacing: 1 }}>🔔 ENABLE NOTIFICATIONS</button>}
+        </div>
       </div>
     </div>
   );
@@ -1441,6 +1463,11 @@ export default function App() {
   const [saveSession, setSaveSession] = useState(null);
   const [historyMode, setHistoryMode] = useState("list");
   const [showAddExercise, setShowAddExercise] = useState(false);
+  const [notifPermission, setNotifPermission] = useState(() => (typeof Notification !== "undefined" ? Notification.permission : "unsupported"));
+  const enableNotifications = async () => {
+    if (typeof Notification === "undefined") return;
+    try { setNotifPermission(await Notification.requestPermission()); } catch { /* ignore */ }
+  };
 
   const importHistory = (sessions, latestWeights) => {
     setState((s) => ({
@@ -1514,6 +1541,30 @@ export default function App() {
     window.addEventListener("beforeunload", handler);
     return () => window.removeEventListener("beforeunload", handler);
   }, [workoutInProgress]);
+
+  // Ongoing Android notification while a workout is in progress. The elapsed
+  // time updates while the app is alive (browsers can't tick it in the
+  // background); tapping the notification reopens the app.
+  const workoutStart = workoutInProgress ? workoutStartTime(completedSets) : null;
+  useEffect(() => {
+    if (!("serviceWorker" in navigator) || typeof Notification === "undefined" || notifPermission !== "granted") return;
+    const closeNotif = () => navigator.serviceWorker.ready.then((reg) => reg.getNotifications({ tag: "active-workout" }).then((ns) => ns.forEach((n) => n.close()))).catch(() => {});
+    if (!workoutInProgress) { closeNotif(); return; }
+    let cancelled = false;
+    const show = () => navigator.serviceWorker.ready.then((reg) => {
+      if (cancelled) return;
+      const elapsed = workoutStart ? Math.floor((Date.now() - workoutStart) / 1000) : null;
+      const clock = workoutStart ? new Date(workoutStart).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : null;
+      reg.showNotification("💪 Workout in progress", {
+        tag: "active-workout", renotify: false, silent: true, requireInteraction: true,
+        icon: "/icon-192.png", badge: "/icon-192.png",
+        body: workoutStart ? `Started ${clock} · ${fmtDuration(elapsed)} elapsed` : "Tap to return to your workout",
+      });
+    }).catch(() => {});
+    show();
+    const id = setInterval(show, 30000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [workoutInProgress, workoutStart, notifPermission]);
 
   // Reset all in-progress workout state (used when switching/finishing).
   const resetActiveWorkout = useCallback(() => {
@@ -1723,7 +1774,7 @@ export default function App() {
 
         {view === "records" && <RecordsView history={state.history} />}
 
-        {view === "equipment" && <EquipmentView equipment={state.equipment} onUpdate={updateEquipment} />}
+        {view === "equipment" && <EquipmentView equipment={state.equipment} onUpdate={updateEquipment} notifPermission={notifPermission} onEnableNotifications={enableNotifications} />}
 
         {view === "programs" && <>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
