@@ -72,6 +72,7 @@ function getExerciseSettings(state, name) {
 // Collect every exercise the user has touched (library + programs + history).
 function allExerciseNames(state) {
   const names = new Set(EXERCISE_LIBRARY.map((e) => e.name));
+  (state.customExercises || []).forEach((e) => names.add(e.name));
   Object.values(state.programs || {}).forEach((days) =>
     days.forEach((d) => d.exercises.forEach((e) => names.add(e.name)))
   );
@@ -85,6 +86,7 @@ function allExerciseNames(state) {
 function buildExerciseList(state) {
   const byName = new Map();
   EXERCISE_LIBRARY.forEach((e) => byName.set(e.name, { ...e }));
+  (state.customExercises || []).forEach((e) => byName.set(e.name, { ...e, custom: true }));
   allExerciseNames(state).forEach((name) => {
     if (byName.has(name)) return;
     let defaultSets = 3, defaultReps = 5;
@@ -358,9 +360,9 @@ const STORAGE_KEY = "strengthtracker_state";
 const initialState = () => {
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved) return { equipment: DEFAULT_EQUIPMENT, customWorkout: { exercises: [] }, exerciseSettings: {}, ...JSON.parse(saved) };
+    if (saved) return { equipment: DEFAULT_EQUIPMENT, customWorkout: { exercises: [] }, exerciseSettings: {}, customExercises: [], ...JSON.parse(saved) };
   } catch { /* ignore corrupt or unavailable storage */ }
-  return { weights: { ...DEFAULT_WEIGHTS }, history: [], programs: DEFAULT_PROGRAMS, activeProgram: "Starting Strength", currentDayIndex: 0, equipment: DEFAULT_EQUIPMENT, customWorkout: { exercises: [] }, exerciseSettings: {} };
+  return { weights: { ...DEFAULT_WEIGHTS }, history: [], programs: DEFAULT_PROGRAMS, activeProgram: "Starting Strength", currentDayIndex: 0, equipment: DEFAULT_EQUIPMENT, customWorkout: { exercises: [] }, exerciseSettings: {}, customExercises: [] };
 };
 
 // In-progress workout (completed work sets, warmup completion, light-day
@@ -1249,6 +1251,60 @@ function makeFireworkBursts() {
   }));
 }
 
+// Modal to add a new custom exercise (name, category, defaults) to the library.
+function AddExerciseModal({ existingNames, onSave, onClose }) {
+  const [name, setName] = useState("");
+  const [category, setCategory] = useState("Upper");
+  const [sets, setSets] = useState(3);
+  const [reps, setReps] = useState(5);
+  const [increment, setIncrement] = useState(5);
+
+  const inp = { background: "#080808", border: "1px solid #3c3c3c", borderRadius: 6, color: "#f0f0f0", fontFamily: "monospace", fontSize: 13, padding: "9px 12px", outline: "none", width: "100%" };
+  const fieldStyle = { ...inp, width: 72, textAlign: "center" };
+  const handleSave = () => {
+    const nm = name.trim();
+    if (!nm) return alert("Enter an exercise name");
+    if (existingNames.some((n) => n.toLowerCase() === nm.toLowerCase())) return alert("An exercise with that name already exists.");
+    onSave({ name: nm, category, defaultSets: sets || 3, defaultReps: reps || 5, increment: increment || 5 });
+  };
+
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.92)", zIndex: 110, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: "#161616", border: "1px solid #383838", borderRadius: 14, padding: 22, width: "100%", maxWidth: 400 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+          <div style={{ fontSize: 18, fontWeight: 900, letterSpacing: 1, color: "#c8f542" }}>ADD EXERCISE</div>
+          <button onClick={onClose} style={{ background: "none", border: "none", color: "#909090", cursor: "pointer", fontSize: 22 }}>✕</button>
+        </div>
+
+        <div style={{ marginBottom: 14 }}>
+          <div style={{ fontSize: 10, color: "#808080", fontFamily: "monospace", marginBottom: 6 }}>NAME</div>
+          <input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Face Pull" style={inp} />
+        </div>
+
+        <div style={{ marginBottom: 14 }}>
+          <div style={{ fontSize: 10, color: "#808080", fontFamily: "monospace", marginBottom: 6 }}>CATEGORY</div>
+          <div style={{ display: "flex", gap: 6 }}>
+            {["Upper", "Lower", "Power"].map((cat) => (
+              <button key={cat} onClick={() => setCategory(cat)} style={{ flex: 1, padding: "8px 6px", borderRadius: 6, border: `1px solid ${category === cat ? CATEGORY_COLORS[cat] : "#3c3c3c"}`, background: category === cat ? `${CATEGORY_COLORS[cat]}1a` : "#1d1d1d", color: category === cat ? CATEGORY_COLORS[cat] : "#909090", fontFamily: "monospace", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>{cat}</button>
+            ))}
+          </div>
+        </div>
+
+        <div style={{ display: "flex", gap: 10, marginBottom: 20 }}>
+          {[["SETS", sets, setSets, true], ["REPS", reps, setReps, true], ["+LB/SESSION", increment, setIncrement, false]].map(([label, val, setter, isInt]) => (
+            <div key={label}>
+              <div style={{ fontSize: 9, color: "#808080", fontFamily: "monospace", marginBottom: 4 }}>{label}</div>
+              <NumberInput value={val} integer={isInt} onChange={setter} style={fieldStyle} />
+            </div>
+          ))}
+        </div>
+
+        <button onClick={handleSave} style={{ width: "100%", padding: 14, background: "#c8f542", border: "none", borderRadius: 10, color: "#0a0a0a", fontWeight: 900, fontSize: 14, letterSpacing: 1, cursor: "pointer" }}>ADD EXERCISE</button>
+      </div>
+    </div>
+  );
+}
+
 // Modal to save a logged session as a program day — into a new program or
 // appended to an existing one.
 function SaveWorkoutModal({ session, exercises, programs, onSave, onClose }) {
@@ -1384,6 +1440,7 @@ export default function App() {
   const [prCelebration, setPrCelebration] = useState(null);
   const [saveSession, setSaveSession] = useState(null);
   const [historyMode, setHistoryMode] = useState("list");
+  const [showAddExercise, setShowAddExercise] = useState(false);
 
   const importHistory = (sessions, latestWeights) => {
     setState((s) => ({
@@ -1429,6 +1486,16 @@ export default function App() {
     ...s,
     exerciseSettings: { ...s.exerciseSettings, [name]: { ...getExerciseSettings(s, name), ...patch } },
   }));
+  const addExerciseToLibrary = (ex) => {
+    setState((s) => ({
+      ...s,
+      customExercises: [...(s.customExercises || []), ex],
+      exerciseSettings: { ...s.exerciseSettings, [ex.name]: { ...getExerciseSettings(s, ex.name), increment: ex.increment } },
+    }));
+    setShowAddExercise(false);
+    setSelectedExercise(ex.name);
+    setView("exercises");
+  };
 
   useEffect(() => {
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch { /* ignore quota / unavailable storage */ }
@@ -1630,14 +1697,17 @@ export default function App() {
           selectedExercise
             ? <ExerciseDetailView name={selectedExercise} history={state.history} settings={getExerciseSettings(state, selectedExercise)} onUpdateSettings={updateExerciseSettings} onBack={() => setSelectedExercise(null)} />
             : <>
-                <div style={{ fontSize: 22, fontWeight: 900, letterSpacing: 2, marginBottom: 6 }}>EXERCISES</div>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                  <div style={{ fontSize: 22, fontWeight: 900, letterSpacing: 2 }}>EXERCISES</div>
+                  <button onClick={() => setShowAddExercise(true)} style={{ padding: "8px 14px", background: "#c8f542", border: "none", borderRadius: 6, color: "#0a0a0a", fontWeight: 900, fontSize: 12, cursor: "pointer", letterSpacing: 1 }}>+ ADD</button>
+                </div>
                 <div style={{ fontSize: 11, color: "#707070", fontFamily: "monospace", marginBottom: 16 }}>tap an exercise for history, PRs & settings</div>
                 {allExerciseNames(state)
                   .map((exName) => ({ name: exName, st: getExerciseStats(state.history, exName) }))
                   .sort((a, b) => b.st.sessions.length - a.st.sessions.length || a.name.localeCompare(b.name))
                   .map(({ name: exName, st }) => {
-                  const lib = EXERCISE_LIBRARY.find((e) => e.name === exName);
-                  const c = lib ? CATEGORY_COLORS[lib.category] : "#888";
+                  const lib = exerciseList.find((e) => e.name === exName);
+                  const c = (lib && CATEGORY_COLORS[lib.category]) || "#888";
                   return (
                     <button key={exName} onClick={() => setSelectedExercise(exName)} style={{ display: "flex", width: "100%", justifyContent: "space-between", alignItems: "center", background: "#1c1c1c", border: "1px solid #383838", borderLeft: `3px solid ${c}`, borderRadius: 10, padding: "12px 16px", marginBottom: 8, cursor: "pointer", textAlign: "left" }}>
                       <div>
@@ -1707,6 +1777,8 @@ export default function App() {
       {prCelebration && <PrCelebration prs={prCelebration} onClose={() => setPrCelebration(null)} />}
 
       {saveSession && <SaveWorkoutModal session={saveSession.session} exercises={saveSession.exercises} programs={state.programs} onSave={saveWorkoutAsProgram} onClose={() => setSaveSession(null)} />}
+
+      {showAddExercise && <AddExerciseModal existingNames={allExerciseNames(state)} onSave={addExerciseToLibrary} onClose={() => setShowAddExercise(false)} />}
     </div>
   );
 }
