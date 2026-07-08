@@ -138,6 +138,7 @@ function sessionToProgramExercises(session, state) {
 // Walk history for an exercise: heaviest single (1-rep PR), best session volume, and per-session log.
 function getExerciseStats(history, name) {
   let heaviestSingle = null; // heaviest 1-rep set: { weight, date }
+  let topThree = null;       // heaviest set of 3 reps: { weight, date }
   let topFive = null;        // heaviest set of 5 reps: { weight, date }
   const sessions = [];
   (history || []).forEach((s) => {
@@ -150,11 +151,12 @@ function getExerciseStats(history, name) {
       const w = set.weight || 0, r = set.reps || 0;
       volume += w * r;
       if (r === 1 && (!heaviestSingle || w > heaviestSingle.weight)) heaviestSingle = { weight: w, date: s.date };
+      if (r === 3 && (!topThree || w > topThree.weight)) topThree = { weight: w, date: s.date };
       if (r === 5 && (!topFive || w > topFive.weight)) topFive = { weight: w, date: s.date };
     });
     sessions.push({ date: s.date, sets, volume });
   });
-  return { heaviestSingle, topFive, sessions: sessions.reverse() };
+  return { heaviestSingle, topThree, topFive, sessions: sessions.reverse() };
 }
 
 // Identify the individual sets that set a new PR (heaviest single-rep or
@@ -360,9 +362,9 @@ const STORAGE_KEY = "strengthtracker_state";
 const initialState = () => {
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved) return { equipment: DEFAULT_EQUIPMENT, customWorkout: { exercises: [] }, exerciseSettings: {}, customExercises: [], ...JSON.parse(saved) };
+    if (saved) return { equipment: DEFAULT_EQUIPMENT, customWorkout: { exercises: [] }, exerciseSettings: {}, customExercises: [], programMode: false, ...JSON.parse(saved) };
   } catch { /* ignore corrupt or unavailable storage */ }
-  return { weights: { ...DEFAULT_WEIGHTS }, history: [], programs: DEFAULT_PROGRAMS, activeProgram: "Starting Strength", currentDayIndex: 0, equipment: DEFAULT_EQUIPMENT, customWorkout: { exercises: [] }, exerciseSettings: {}, customExercises: [] };
+  return { weights: { ...DEFAULT_WEIGHTS }, history: [], programs: DEFAULT_PROGRAMS, activeProgram: "Starting Strength", currentDayIndex: 0, equipment: DEFAULT_EQUIPMENT, customWorkout: { exercises: [] }, exerciseSettings: {}, customExercises: [], programMode: false };
 };
 
 // In-progress workout (completed work sets, warmup completion, light-day
@@ -370,7 +372,7 @@ const initialState = () => {
 // closing the app. Kept apart from the main state to avoid re-serializing the
 // full history on every set edit.
 const ACTIVE_KEY = "strengthtracker_active";
-const emptyActive = () => ({ completedSets: {}, warmupDone: {}, lightDays: {}, isCustomMode: false });
+const emptyActive = () => ({ completedSets: {}, warmupDone: {}, lightDays: {}, isCustomMode: true });
 const loadActive = () => {
   try {
     const saved = localStorage.getItem(ACTIVE_KEY);
@@ -854,7 +856,7 @@ function RecordsView({ history }) {
   );
 }
 
-function EquipmentView({ equipment, onUpdate, notifPermission, onEnableNotifications }) {
+function EquipmentView({ equipment, onUpdate, notifPermission, onEnableNotifications, programMode, onToggleProgramMode }) {
   const updateBar = (name) => onUpdate({ ...equipment, activeBar: name });
   const updateCount = (weight, delta) => onUpdate({
     ...equipment,
@@ -862,7 +864,20 @@ function EquipmentView({ equipment, onUpdate, notifPermission, onEnableNotificat
   });
   return (
     <div>
-      <div style={{ fontSize: 22, fontWeight: 900, letterSpacing: 2, marginBottom: 16 }}>EQUIPMENT</div>
+      <div style={{ fontSize: 22, fontWeight: 900, letterSpacing: 2, marginBottom: 16 }}>SETTINGS</div>
+
+      <div style={{ marginBottom: 24 }}>
+        <div style={{ fontSize: 10, color: "#808080", fontFamily: "monospace", letterSpacing: 1, marginBottom: 8 }}>TRAINING MODE</div>
+        <div style={{ background: "#1c1c1c", border: "1px solid #383838", borderRadius: 8, padding: "12px 14px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+          <div>
+            <div style={{ fontSize: 12, color: "#d0d0d0", fontWeight: 700 }}>Recurring program</div>
+            <div style={{ fontSize: 10, color: "#707070", fontFamily: "monospace", marginTop: 3, lineHeight: 1.5 }}>Follow a program's days in sequence. Off = every session is a custom workout.</div>
+          </div>
+          <button onClick={() => onToggleProgramMode(!programMode)} style={{ flexShrink: 0, width: 52, height: 30, borderRadius: 15, border: "none", background: programMode ? "#c8f542" : "#3a3a3a", cursor: "pointer", position: "relative", transition: "background 0.15s" }}>
+            <span style={{ position: "absolute", top: 3, left: programMode ? 25 : 3, width: 24, height: 24, borderRadius: "50%", background: programMode ? "#0a0a0a" : "#e0e0e0", transition: "left 0.15s" }} />
+          </button>
+        </div>
+      </div>
 
       <div style={{ marginBottom: 20 }}>
         <div style={{ fontSize: 10, color: "#808080", fontFamily: "monospace", letterSpacing: 1, marginBottom: 8 }}>BARBELL</div>
@@ -1273,6 +1288,97 @@ function makeFireworkBursts() {
   }));
 }
 
+// Configure an exercise before adding it to a custom workout: number of work
+// sets, plus weight & reps per set. Shows the last 5 sessions and PRs to help
+// decide what to program.
+function ExerciseConfigurator({ name, history, defaultReps, lastWeight, onAdd, onClose }) {
+  const stats = useMemo(() => getExerciseStats(history, name), [history, name]);
+  const [plan, setPlan] = useState(() => {
+    const recent = stats.sessions[0];
+    if (recent) {
+      const wm = markWarmups(recent.sets);
+      const work = recent.sets.filter((_, i) => !wm[i]);
+      if (work.length) return work.map((s) => ({ weight: s.weight || 0, reps: s.reps || defaultReps }));
+    }
+    return Array.from({ length: 3 }, () => ({ weight: lastWeight || 0, reps: defaultReps }));
+  });
+
+  const setCount = (n) => setPlan((p) => {
+    n = Math.max(1, n);
+    if (n <= p.length) return p.slice(0, n);
+    const last = p[p.length - 1] || { weight: lastWeight || 0, reps: defaultReps };
+    return [...p, ...Array.from({ length: n - p.length }, () => ({ ...last }))];
+  });
+  const updateSet = (i, field, val) => setPlan((p) => p.map((s, idx) => idx === i ? { ...s, [field]: val } : s));
+
+  const inpStyle = { background: "#111", border: "1px solid #3c3c3c", borderRadius: 4, color: "#e0e0e0", textAlign: "center", fontSize: 14, fontWeight: 700, padding: "5px 0", fontFamily: "monospace", outline: "none" };
+  const stepBtn = { width: 34, height: 34, borderRadius: 6, border: "1px solid #3c3c3c", background: "#1e1e1e", color: "#aaa", cursor: "pointer", fontSize: 18 };
+  const sectionLabel = { fontSize: 10, color: "#808080", fontFamily: "monospace", letterSpacing: 1, marginBottom: 8 };
+  const lastFive = stats.sessions.slice(0, 5);
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.97)", zIndex: 115, overflowY: "auto" }}>
+      <div style={{ maxWidth: 560, margin: "0 auto", padding: "20px 16px 110px" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+          <div style={{ fontSize: 20, fontWeight: 900, letterSpacing: 1, color: "#c8f542" }}>{name}</div>
+          <button onClick={onClose} style={{ background: "none", border: "none", color: "#909090", cursor: "pointer", fontSize: 24 }}>✕</button>
+        </div>
+
+        {/* PRs */}
+        <div style={sectionLabel}>PERSONAL RECORDS</div>
+        <div style={{ display: "flex", gap: 8, marginBottom: 22 }}>
+          <PrCard label="SINGLE" value={stats.heaviestSingle ? `${stats.heaviestSingle.weight}lb` : ""} sub={stats.heaviestSingle ? new Date(stats.heaviestSingle.date).toLocaleDateString() : "—"} />
+          <PrCard label="SET OF 3" value={stats.topThree ? `${stats.topThree.weight}lb` : ""} sub={stats.topThree ? new Date(stats.topThree.date).toLocaleDateString() : "—"} />
+          <PrCard label="SET OF 5" value={stats.topFive ? `${stats.topFive.weight}lb` : ""} sub={stats.topFive ? new Date(stats.topFive.date).toLocaleDateString() : "—"} />
+        </div>
+
+        {/* Last 5 sessions */}
+        <div style={sectionLabel}>LAST 5 SESSIONS</div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 22 }}>
+          {lastFive.length === 0
+            ? <div style={{ color: "#707070", fontFamily: "monospace", fontSize: 11, padding: "10px 0" }}>never done before — no history yet</div>
+            : lastFive.map((sess, i) => {
+                const wm = markWarmups(sess.sets);
+                const work = sess.sets.filter((_, j) => !wm[j]);
+                return (
+                  <div key={i} style={{ background: "#1c1c1c", border: "1px solid #383838", borderRadius: 8, padding: "8px 12px" }}>
+                    <div style={{ color: "#909090", fontFamily: "monospace", fontSize: 10, marginBottom: 4 }}>{new Date(sess.date).toLocaleDateString()}</div>
+                    <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+                      {work.map((s, j) => <span key={j} style={{ fontSize: 11, fontFamily: "monospace", color: WORK_COLOR, background: `${WORK_COLOR}14`, border: `1px solid ${WORK_COLOR}33`, borderRadius: 4, padding: "2px 7px" }}>{s.weight}lb×{s.reps}</span>)}
+                    </div>
+                  </div>
+                );
+              })}
+        </div>
+
+        {/* Configure */}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+          <div style={sectionLabel}>WORK SETS</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <button onClick={() => setCount(plan.length - 1)} style={stepBtn}>−</button>
+            <span style={{ minWidth: 24, textAlign: "center", color: "#c8f542", fontWeight: 800, fontFamily: "monospace", fontSize: 18 }}>{plan.length}</span>
+            <button onClick={() => setCount(plan.length + 1)} style={stepBtn}>+</button>
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 8, padding: "0 4px 6px", fontSize: 9, color: "#707070", fontFamily: "monospace" }}>
+          <span style={{ width: 24 }}>#</span>
+          <span style={{ flex: 1 }}>WEIGHT (LB)</span>
+          <span style={{ flex: 1 }}>REPS</span>
+        </div>
+        {plan.map((s, i) => (
+          <div key={i} style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 6 }}>
+            <span style={{ width: 24, textAlign: "center", color: "#707070", fontFamily: "monospace", fontSize: 12 }}>{i + 1}</span>
+            <div style={{ flex: 1 }}><NumberInput value={s.weight} onChange={(n) => updateSet(i, "weight", n)} style={{ ...inpStyle, width: "100%" }} /></div>
+            <div style={{ flex: 1 }}><NumberInput integer value={s.reps} onChange={(n) => updateSet(i, "reps", n)} style={{ ...inpStyle, width: "100%" }} /></div>
+          </div>
+        ))}
+
+        <button onClick={() => onAdd(plan)} style={{ width: "100%", marginTop: 18, padding: 16, background: "#c8f542", border: "none", borderRadius: 10, color: "#0a0a0a", fontWeight: 900, fontSize: 15, letterSpacing: 1, cursor: "pointer" }}>ADD TO WORKOUT</button>
+      </div>
+    </div>
+  );
+}
+
 // Modal to add a new custom exercise (name, category, defaults) to the library.
 function AddExerciseModal({ existingNames, onSave, onClose }) {
   const [name, setName] = useState("");
@@ -1463,6 +1569,7 @@ export default function App() {
   const [saveSession, setSaveSession] = useState(null);
   const [historyMode, setHistoryMode] = useState("list");
   const [showAddExercise, setShowAddExercise] = useState(false);
+  const [configExercise, setConfigExercise] = useState(null);
   const [notifPermission, setNotifPermission] = useState(() => (typeof Notification !== "undefined" ? Notification.permission : "unsupported"));
   const enableNotifications = async () => {
     if (typeof Notification === "undefined") return;
@@ -1580,18 +1687,21 @@ export default function App() {
   const program = state.programs[state.activeProgram] || [];
   const day = program[state.currentDayIndex] || program[0];
   const programExercises = day?.exercises || [];
-  const activeExercises = isCustomMode ? (state.customWorkout?.exercises || []) : programExercises;
+  // Custom is the default mode; program (recurring) mode only applies when the
+  // user has enabled it in settings.
+  const inCustom = !state.programMode || isCustomMode;
+  const activeExercises = inCustom ? (state.customWorkout?.exercises || []) : programExercises;
   const allDone = activeExercises.length > 0 && activeExercises.every((ex) => completedSets[ex.name]?.done);
 
   const updateWeight = (name, val) => setState((s) => ({ ...s, weights: { ...s.weights, [name]: Math.max(0, val) } }));
   const markComplete = useCallback((name, isDone, setsData) => setCompletedSets((p) => ({ ...p, [name]: { done: isDone, sets: setsData } })), []);
   const finishWorkout = () => {
-    if (!isCustomMode && !day) return;
-    const exes = isCustomMode ? (state.customWorkout?.exercises || []) : programExercises;
+    if (!inCustom && !day) return;
+    const exes = inCustom ? (state.customWorkout?.exercises || []) : programExercises;
     const session = {
       date: Date.now(),
-      programName: isCustomMode ? "Custom" : state.activeProgram,
-      dayLabel: isCustomMode ? "Custom" : day.label,
+      programName: inCustom ? "Custom" : state.activeProgram,
+      dayLabel: inCustom ? "Custom" : day.label,
       exercises: exes.map((ex) => ({
         name: ex.name,
         sets: ex.sets,
@@ -1625,16 +1735,23 @@ export default function App() {
       ...s,
       weights: newWeights,
       history: [...s.history, session],
-      ...(isCustomMode ? { customWorkout: { exercises: [] } } : { currentDayIndex: (state.currentDayIndex + 1) % program.length }),
+      ...(inCustom ? { customWorkout: { exercises: [] } } : { currentDayIndex: (state.currentDayIndex + 1) % program.length }),
     }));
     resetActiveWorkout();
-    if (isCustomMode) setIsCustomMode(false);
+    if (inCustom && state.programMode) setIsCustomMode(false);
     setView("history");
     if (prs.length) setPrCelebration(prs);
   };
-  const addCustomExercise = (exName) => {
-    const lib = exerciseList.find((e) => e.name === exName) || { defaultSets: 3, defaultReps: 5, increment: 5 };
-    setState((s) => ({ ...s, customWorkout: { exercises: [...(s.customWorkout?.exercises || []), { name: exName, sets: lib.defaultSets, reps: lib.defaultReps, increment: lib.increment }] } }));
+  const addConfiguredExercise = (exName, plan) => {
+    const lib = exerciseList.find((e) => e.name === exName) || { defaultReps: 5, increment: 5 };
+    const reps = plan[0]?.reps ?? lib.defaultReps ?? 5;
+    const topWeight = Math.max(0, ...plan.map((p) => p.weight || 0));
+    setState((s) => ({
+      ...s,
+      customWorkout: { exercises: [...(s.customWorkout?.exercises || []), { name: exName, sets: plan.length, reps, increment: lib.increment, plan }] },
+      weights: { ...s.weights, [exName]: topWeight },
+    }));
+    setConfigExercise(null);
   };
   const removeCustomExercise = (exName) => {
     setState((s) => ({ ...s, customWorkout: { exercises: (s.customWorkout?.exercises || []).filter((e) => e.name !== exName) } }));
@@ -1654,6 +1771,7 @@ export default function App() {
   const deleteProgram = (pname) => { if (!confirm(`Delete "${pname}"?`)) return; setState((s) => { const { [pname]: _, ...rest } = s.programs; return { ...s, programs: rest, activeProgram: Object.keys(rest)[0] || null, currentDayIndex: 0 }; }); };
   const selectProgram = (pname) => { setState((s) => ({ ...s, activeProgram: pname, currentDayIndex: 0 })); resetActiveWorkout(); setShowPicker(false); };
   const updateEquipment = (eq) => setState((s) => ({ ...s, equipment: eq }));
+  const setProgramMode = (on) => { setState((s) => ({ ...s, programMode: on })); if (!on) setIsCustomMode(true); };
   const nav = (label, active, onClick) => <button onClick={onClick} style={{ padding: "7px 13px", borderRadius: 6, border: "none", background: active ? "#c8f542" : "#1d1d1d", color: active ? "#0a0a0a" : "#909090", fontFamily: "monospace", fontSize: 11, fontWeight: 700, cursor: "pointer", textTransform: "uppercase", letterSpacing: 1 }}>{label}</button>;
 
   return (
@@ -1669,17 +1787,17 @@ export default function App() {
           {nav("Records", view === "records", () => setView("records"))}
           {nav("History", view === "history", () => setView("history"))}
           {nav("Programs", view === "programs", () => setView("programs"))}
-          {nav("Equipment", view === "equipment", () => setView("equipment"))}
+          {nav("Settings", view === "equipment", () => setView("equipment"))}
         </div>
       </div>
 
       <div style={{ maxWidth: 580, margin: "0 auto", padding: "16px 14px 80px" }}>
         {view === "workout" && <>
-          {isCustomMode ? (
+          {inCustom ? (
             <div style={{ background: "#181818", border: "1px solid #383838", borderRadius: 10, padding: "12px 16px", marginBottom: 14 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-                <div style={{ fontSize: 13, fontWeight: 800, letterSpacing: 2, color: "#c8f542" }}>CUSTOM WORKOUT</div>
-                <button onClick={() => { setIsCustomMode(false); resetActiveWorkout(); }} style={{ background: "none", border: "1px solid #383838", borderRadius: 5, color: "#909090", cursor: "pointer", padding: "5px 10px", fontFamily: "monospace", fontSize: 10 }}>← PROGRAM</button>
+                <div style={{ fontSize: 13, fontWeight: 800, letterSpacing: 2, color: "#c8f542" }}>WORKOUT</div>
+                {state.programMode && <button onClick={() => { setIsCustomMode(false); resetActiveWorkout(); }} style={{ background: "none", border: "1px solid #383838", borderRadius: 5, color: "#909090", cursor: "pointer", padding: "5px 10px", fontFamily: "monospace", fontSize: 10 }}>← PROGRAM</button>}
               </div>
               {(state.customWorkout?.exercises || []).map((ex, idx) => {
                 const lib = exerciseList.find((e) => e.name === ex.name);
@@ -1695,7 +1813,7 @@ export default function App() {
                   </div>
                 );
               })}
-              <ExercisePicker usedNames={(state.customWorkout?.exercises || []).map((e) => e.name)} onAdd={addCustomExercise} exercises={exerciseList} />
+              <ExercisePicker usedNames={(state.customWorkout?.exercises || []).map((e) => e.name)} onAdd={(n) => setConfigExercise(n)} exercises={exerciseList} />
             </div>
           ) : (
             <div style={{ background: "#181818", border: "1px solid #383838", borderRadius: 10, padding: "12px 16px", marginBottom: 14 }}>
@@ -1719,9 +1837,9 @@ export default function App() {
             </div>
           )}
           {activeExercises.length === 0
-            ? <div style={{ textAlign: "center", color: "#707070", padding: "60px 0", fontFamily: "monospace", fontSize: 12 }}>{isCustomMode ? "ADD EXERCISES ABOVE TO BEGIN" : "NO EXERCISES — GO TO PROGRAMS TAB"}</div>
+            ? <div style={{ textAlign: "center", color: "#707070", padding: "60px 0", fontFamily: "monospace", fontSize: 12 }}>{inCustom ? "ADD EXERCISES ABOVE TO BEGIN" : "NO EXERCISES — GO TO PROGRAMS TAB"}</div>
             : <div style={{ display: "flex", flexDirection: "column", gap: 10 }} key={sessionKey}>
-                {activeExercises.map((ex) => <ExerciseCard key={ex.name} exercise={ex} weight={state.weights[ex.name] ?? 0} onWeightChange={(val) => updateWeight(ex.name, val)} onComplete={markComplete} equipment={state.equipment} settings={getExerciseSettings(state, ex.name)} onOpenDetail={openExerciseDetail} allowLightDay={isCustomMode} lightDay={!!lightDays[ex.name]} onLightDayToggle={toggleLightDay} initialSets={completedSets[ex.name]?.sets} warmupDone={warmupDone[ex.name]} onWarmupDone={setWarmup} />)}
+                {activeExercises.map((ex) => <ExerciseCard key={ex.name} exercise={ex} weight={state.weights[ex.name] ?? 0} onWeightChange={(val) => updateWeight(ex.name, val)} onComplete={markComplete} equipment={state.equipment} settings={getExerciseSettings(state, ex.name)} onOpenDetail={openExerciseDetail} allowLightDay={inCustom} lightDay={!!lightDays[ex.name]} onLightDayToggle={toggleLightDay} initialSets={completedSets[ex.name]?.sets || ex.plan} warmupDone={warmupDone[ex.name]} onWarmupDone={setWarmup} />)}
               </div>
           }
           <button onClick={finishWorkout} disabled={!allDone} style={{ width: "100%", marginTop: 16, padding: 15, background: allDone ? "#c8f542" : "#161616", color: allDone ? "#0a0a0a" : "#777", border: `1px solid ${allDone ? "#c8f542" : "#181818"}`, borderRadius: 10, fontWeight: 900, fontSize: 14, letterSpacing: 2, cursor: allDone ? "pointer" : "not-allowed", transition: "all 0.2s" }}>{allDone ? "✓ FINISH & LOG WORKOUT" : "COMPLETE ALL SETS TO FINISH"}</button>
@@ -1774,7 +1892,7 @@ export default function App() {
 
         {view === "records" && <RecordsView history={state.history} />}
 
-        {view === "equipment" && <EquipmentView equipment={state.equipment} onUpdate={updateEquipment} notifPermission={notifPermission} onEnableNotifications={enableNotifications} />}
+        {view === "equipment" && <EquipmentView equipment={state.equipment} onUpdate={updateEquipment} notifPermission={notifPermission} onEnableNotifications={enableNotifications} programMode={state.programMode} onToggleProgramMode={setProgramMode} />}
 
         {view === "programs" && <>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
@@ -1830,6 +1948,8 @@ export default function App() {
       {saveSession && <SaveWorkoutModal session={saveSession.session} exercises={saveSession.exercises} programs={state.programs} onSave={saveWorkoutAsProgram} onClose={() => setSaveSession(null)} />}
 
       {showAddExercise && <AddExerciseModal existingNames={allExerciseNames(state)} onSave={addExerciseToLibrary} onClose={() => setShowAddExercise(false)} />}
+
+      {configExercise && <ExerciseConfigurator name={configExercise} history={state.history} defaultReps={exerciseList.find((e) => e.name === configExercise)?.defaultReps ?? 5} lastWeight={state.weights[configExercise] ?? 0} onAdd={(plan) => addConfiguredExercise(configExercise, plan)} onClose={() => setConfigExercise(null)} />}
     </div>
   );
 }
