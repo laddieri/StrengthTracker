@@ -1684,6 +1684,13 @@ export default function App() {
   const setWarmup = useCallback((name, d) => setWarmupDone((p) => (p[name] === d ? p : { ...p, [name]: d })), []);
 
   const exerciseList = useMemo(() => buildExerciseList(state), [state]);
+  // Exercises for the custom-workout picker, ordered by how often each has been
+  // used (sessions logged) so the most-used lifts are at the top.
+  const pickerExercises = useMemo(() => {
+    const usage = {};
+    (state.history || []).forEach((s) => s.exercises.forEach((e) => { usage[e.name] = (usage[e.name] || 0) + 1; }));
+    return [...exerciseList].sort((a, b) => (usage[b.name] || 0) - (usage[a.name] || 0) || a.name.localeCompare(b.name));
+  }, [exerciseList, state.history]);
   const program = state.programs[state.activeProgram] || [];
   const day = program[state.currentDayIndex] || program[0];
   const programExercises = day?.exercises || [];
@@ -1813,7 +1820,7 @@ export default function App() {
                   </div>
                 );
               })}
-              <ExercisePicker usedNames={(state.customWorkout?.exercises || []).map((e) => e.name)} onAdd={(n) => setConfigExercise(n)} exercises={exerciseList} />
+              <ExercisePicker usedNames={(state.customWorkout?.exercises || []).map((e) => e.name)} onAdd={(n) => setConfigExercise(n)} exercises={pickerExercises} />
             </div>
           ) : (
             <div style={{ background: "#181818", border: "1px solid #383838", borderRadius: 10, padding: "12px 16px", marginBottom: 14 }}>
