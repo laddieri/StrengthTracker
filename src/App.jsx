@@ -1673,6 +1673,49 @@ export default function App() {
     return () => { cancelled = true; clearInterval(id); };
   }, [workoutInProgress, workoutStart, notifPermission]);
 
+  // Back-button / swipe-back navigation. Each open overlay (and being off the
+  // home tab) is a "layer"; we mirror the layer count into browser history so
+  // Android back / swipe unwinds them instead of closing the app.
+  const navLayers = [
+    prCelebration, configExercise, saveSession, showAddExercise, showImport, showBuilder, showPicker,
+    view === "exercises" && !!selectedExercise, view !== "workout",
+  ];
+  const navDepth = navLayers.filter(Boolean).length;
+  const closeTopRef = useRef(null);
+  closeTopRef.current = () => {
+    if (prCelebration) return setPrCelebration(null);
+    if (configExercise) return setConfigExercise(null);
+    if (saveSession) return setSaveSession(null);
+    if (showAddExercise) return setShowAddExercise(false);
+    if (showImport) return setShowImport(false);
+    if (showBuilder) { setShowBuilder(false); setEditingProgram(null); return; }
+    if (showPicker) return setShowPicker(false);
+    if (view === "exercises" && selectedExercise) return setSelectedExercise(null);
+    if (view !== "workout") return setView("workout");
+  };
+  const histDepthRef = useRef(0);
+  const suppressPopRef = useRef(0);
+  useEffect(() => {
+    const cur = histDepthRef.current;
+    if (navDepth > cur) {
+      for (let i = 0; i < navDepth - cur; i++) window.history.pushState({ st: true }, "");
+      histDepthRef.current = navDepth;
+    } else if (navDepth < cur) {
+      const n = cur - navDepth;
+      suppressPopRef.current += n;
+      histDepthRef.current = navDepth;
+      window.history.go(-n);
+    }
+  }, [navDepth]);
+  useEffect(() => {
+    const onPop = () => {
+      if (suppressPopRef.current > 0) { suppressPopRef.current -= 1; return; }
+      if (histDepthRef.current > 0) { histDepthRef.current -= 1; closeTopRef.current?.(); }
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
+
   // Reset all in-progress workout state (used when switching/finishing).
   const resetActiveWorkout = useCallback(() => {
     setCompletedSets({}); setWarmupDone({}); setLightDays({}); setSessionKey((k) => k + 1);
