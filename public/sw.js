@@ -18,6 +18,18 @@ self.addEventListener("activate", (event) => {
   );
 });
 
+// Tapping the ongoing-workout notification (or its action) focuses the app,
+// opening a new window only if none is already open.
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  event.waitUntil(
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((list) => {
+      for (const c of list) { if ("focus" in c) return c.focus(); }
+      if (self.clients.openWindow) return self.clients.openWindow("/");
+    })
+  );
+});
+
 self.addEventListener("fetch", (event) => {
   const { request } = event;
   if (request.method !== "GET") return;

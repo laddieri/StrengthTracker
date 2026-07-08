@@ -72,6 +72,7 @@ function getExerciseSettings(state, name) {
 // Collect every exercise the user has touched (library + programs + history).
 function allExerciseNames(state) {
   const names = new Set(EXERCISE_LIBRARY.map((e) => e.name));
+  (state.customExercises || []).forEach((e) => names.add(e.name));
   Object.values(state.programs || {}).forEach((days) =>
     days.forEach((d) => d.exercises.forEach((e) => names.add(e.name)))
   );
@@ -85,6 +86,7 @@ function allExerciseNames(state) {
 function buildExerciseList(state) {
   const byName = new Map();
   EXERCISE_LIBRARY.forEach((e) => byName.set(e.name, { ...e }));
+  (state.customExercises || []).forEach((e) => byName.set(e.name, { ...e, custom: true }));
   allExerciseNames(state).forEach((name) => {
     if (byName.has(name)) return;
     let defaultSets = 3, defaultReps = 5;
@@ -358,9 +360,9 @@ const STORAGE_KEY = "strengthtracker_state";
 const initialState = () => {
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved) return { equipment: DEFAULT_EQUIPMENT, customWorkout: { exercises: [] }, exerciseSettings: {}, ...JSON.parse(saved) };
+    if (saved) return { equipment: DEFAULT_EQUIPMENT, customWorkout: { exercises: [] }, exerciseSettings: {}, customExercises: [], ...JSON.parse(saved) };
   } catch { /* ignore corrupt or unavailable storage */ }
-  return { weights: { ...DEFAULT_WEIGHTS }, history: [], programs: DEFAULT_PROGRAMS, activeProgram: "Starting Strength", currentDayIndex: 0, equipment: DEFAULT_EQUIPMENT, customWorkout: { exercises: [] }, exerciseSettings: {} };
+  return { weights: { ...DEFAULT_WEIGHTS }, history: [], programs: DEFAULT_PROGRAMS, activeProgram: "Starting Strength", currentDayIndex: 0, equipment: DEFAULT_EQUIPMENT, customWorkout: { exercises: [] }, exerciseSettings: {}, customExercises: [] };
 };
 
 // In-progress workout (completed work sets, warmup completion, light-day
@@ -380,6 +382,12 @@ const loadActive = () => {
 const hasActiveProgress = (completedSets, warmupDone) =>
   Object.values(completedSets || {}).some((c) => c?.sets?.some((s) => s.completed)) ||
   Object.values(warmupDone || {}).some((d) => Object.values(d || {}).some(Boolean));
+// Earliest completed-set timestamp = when the workout started (null if unknown).
+const workoutStartTime = (completedSets) => {
+  let min = Infinity;
+  Object.values(completedSets || {}).forEach((c) => c?.sets?.forEach((s) => { if (s.completedAt && s.completedAt < min) min = s.completedAt; }));
+  return Number.isFinite(min) ? min : null;
+};
 
 
 // Numeric input that avoids the controlled-number quirk where leading zeros
@@ -846,7 +854,7 @@ function RecordsView({ history }) {
   );
 }
 
-function EquipmentView({ equipment, onUpdate }) {
+function EquipmentView({ equipment, onUpdate, notifPermission, onEnableNotifications }) {
   const updateBar = (name) => onUpdate({ ...equipment, activeBar: name });
   const updateCount = (weight, delta) => onUpdate({
     ...equipment,
@@ -882,6 +890,22 @@ function EquipmentView({ equipment, onUpdate }) {
             </div>
           </div>
         ))}
+      </div>
+
+      <div style={{ marginTop: 24 }}>
+        <div style={{ fontSize: 10, color: "#808080", fontFamily: "monospace", letterSpacing: 1, marginBottom: 8 }}>WORKOUT NOTIFICATION</div>
+        <div style={{ background: "#1c1c1c", border: "1px solid #383838", borderRadius: 8, padding: "12px 14px" }}>
+          <div style={{ fontSize: 11, color: "#909090", fontFamily: "monospace", lineHeight: 1.6, marginBottom: 10 }}>
+            Show an ongoing notification with the elapsed time while a workout is in progress. The timer updates while the app is open.
+          </div>
+          {notifPermission === "unsupported"
+            ? <div style={{ fontSize: 11, color: "#707070", fontFamily: "monospace" }}>Not supported on this browser.</div>
+            : notifPermission === "granted"
+              ? <div style={{ fontSize: 12, color: "#c8f542", fontFamily: "monospace", fontWeight: 700 }}>✓ Enabled</div>
+              : notifPermission === "denied"
+                ? <div style={{ fontSize: 11, color: "#e0a252", fontFamily: "monospace" }}>Blocked — enable notifications for this site in your browser settings.</div>
+                : <button onClick={onEnableNotifications} style={{ padding: "9px 16px", background: "#c8f542", border: "none", borderRadius: 6, color: "#0a0a0a", fontWeight: 900, fontSize: 12, cursor: "pointer", letterSpacing: 1 }}>🔔 ENABLE NOTIFICATIONS</button>}
+        </div>
       </div>
     </div>
   );
@@ -1249,6 +1273,60 @@ function makeFireworkBursts() {
   }));
 }
 
+// Modal to add a new custom exercise (name, category, defaults) to the library.
+function AddExerciseModal({ existingNames, onSave, onClose }) {
+  const [name, setName] = useState("");
+  const [category, setCategory] = useState("Upper");
+  const [sets, setSets] = useState(3);
+  const [reps, setReps] = useState(5);
+  const [increment, setIncrement] = useState(5);
+
+  const inp = { background: "#080808", border: "1px solid #3c3c3c", borderRadius: 6, color: "#f0f0f0", fontFamily: "monospace", fontSize: 13, padding: "9px 12px", outline: "none", width: "100%" };
+  const fieldStyle = { ...inp, width: 72, textAlign: "center" };
+  const handleSave = () => {
+    const nm = name.trim();
+    if (!nm) return alert("Enter an exercise name");
+    if (existingNames.some((n) => n.toLowerCase() === nm.toLowerCase())) return alert("An exercise with that name already exists.");
+    onSave({ name: nm, category, defaultSets: sets || 3, defaultReps: reps || 5, increment: increment || 5 });
+  };
+
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.92)", zIndex: 110, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: "#161616", border: "1px solid #383838", borderRadius: 14, padding: 22, width: "100%", maxWidth: 400 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+          <div style={{ fontSize: 18, fontWeight: 900, letterSpacing: 1, color: "#c8f542" }}>ADD EXERCISE</div>
+          <button onClick={onClose} style={{ background: "none", border: "none", color: "#909090", cursor: "pointer", fontSize: 22 }}>✕</button>
+        </div>
+
+        <div style={{ marginBottom: 14 }}>
+          <div style={{ fontSize: 10, color: "#808080", fontFamily: "monospace", marginBottom: 6 }}>NAME</div>
+          <input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Face Pull" style={inp} />
+        </div>
+
+        <div style={{ marginBottom: 14 }}>
+          <div style={{ fontSize: 10, color: "#808080", fontFamily: "monospace", marginBottom: 6 }}>CATEGORY</div>
+          <div style={{ display: "flex", gap: 6 }}>
+            {["Upper", "Lower", "Power"].map((cat) => (
+              <button key={cat} onClick={() => setCategory(cat)} style={{ flex: 1, padding: "8px 6px", borderRadius: 6, border: `1px solid ${category === cat ? CATEGORY_COLORS[cat] : "#3c3c3c"}`, background: category === cat ? `${CATEGORY_COLORS[cat]}1a` : "#1d1d1d", color: category === cat ? CATEGORY_COLORS[cat] : "#909090", fontFamily: "monospace", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>{cat}</button>
+            ))}
+          </div>
+        </div>
+
+        <div style={{ display: "flex", gap: 10, marginBottom: 20 }}>
+          {[["SETS", sets, setSets, true], ["REPS", reps, setReps, true], ["+LB/SESSION", increment, setIncrement, false]].map(([label, val, setter, isInt]) => (
+            <div key={label}>
+              <div style={{ fontSize: 9, color: "#808080", fontFamily: "monospace", marginBottom: 4 }}>{label}</div>
+              <NumberInput value={val} integer={isInt} onChange={setter} style={fieldStyle} />
+            </div>
+          ))}
+        </div>
+
+        <button onClick={handleSave} style={{ width: "100%", padding: 14, background: "#c8f542", border: "none", borderRadius: 10, color: "#0a0a0a", fontWeight: 900, fontSize: 14, letterSpacing: 1, cursor: "pointer" }}>ADD EXERCISE</button>
+      </div>
+    </div>
+  );
+}
+
 // Modal to save a logged session as a program day — into a new program or
 // appended to an existing one.
 function SaveWorkoutModal({ session, exercises, programs, onSave, onClose }) {
@@ -1384,6 +1462,12 @@ export default function App() {
   const [prCelebration, setPrCelebration] = useState(null);
   const [saveSession, setSaveSession] = useState(null);
   const [historyMode, setHistoryMode] = useState("list");
+  const [showAddExercise, setShowAddExercise] = useState(false);
+  const [notifPermission, setNotifPermission] = useState(() => (typeof Notification !== "undefined" ? Notification.permission : "unsupported"));
+  const enableNotifications = async () => {
+    if (typeof Notification === "undefined") return;
+    try { setNotifPermission(await Notification.requestPermission()); } catch { /* ignore */ }
+  };
 
   const importHistory = (sessions, latestWeights) => {
     setState((s) => ({
@@ -1429,6 +1513,16 @@ export default function App() {
     ...s,
     exerciseSettings: { ...s.exerciseSettings, [name]: { ...getExerciseSettings(s, name), ...patch } },
   }));
+  const addExerciseToLibrary = (ex) => {
+    setState((s) => ({
+      ...s,
+      customExercises: [...(s.customExercises || []), ex],
+      exerciseSettings: { ...s.exerciseSettings, [ex.name]: { ...getExerciseSettings(s, ex.name), increment: ex.increment } },
+    }));
+    setShowAddExercise(false);
+    setSelectedExercise(ex.name);
+    setView("exercises");
+  };
 
   useEffect(() => {
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch { /* ignore quota / unavailable storage */ }
@@ -1447,6 +1541,30 @@ export default function App() {
     window.addEventListener("beforeunload", handler);
     return () => window.removeEventListener("beforeunload", handler);
   }, [workoutInProgress]);
+
+  // Ongoing Android notification while a workout is in progress. The elapsed
+  // time updates while the app is alive (browsers can't tick it in the
+  // background); tapping the notification reopens the app.
+  const workoutStart = workoutInProgress ? workoutStartTime(completedSets) : null;
+  useEffect(() => {
+    if (!("serviceWorker" in navigator) || typeof Notification === "undefined" || notifPermission !== "granted") return;
+    const closeNotif = () => navigator.serviceWorker.ready.then((reg) => reg.getNotifications({ tag: "active-workout" }).then((ns) => ns.forEach((n) => n.close()))).catch(() => {});
+    if (!workoutInProgress) { closeNotif(); return; }
+    let cancelled = false;
+    const show = () => navigator.serviceWorker.ready.then((reg) => {
+      if (cancelled) return;
+      const elapsed = workoutStart ? Math.floor((Date.now() - workoutStart) / 1000) : null;
+      const clock = workoutStart ? new Date(workoutStart).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : null;
+      reg.showNotification("💪 Workout in progress", {
+        tag: "active-workout", renotify: false, silent: true, requireInteraction: true,
+        icon: "/icon-192.png", badge: "/icon-192.png",
+        body: workoutStart ? `Started ${clock} · ${fmtDuration(elapsed)} elapsed` : "Tap to return to your workout",
+      });
+    }).catch(() => {});
+    show();
+    const id = setInterval(show, 30000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [workoutInProgress, workoutStart, notifPermission]);
 
   // Reset all in-progress workout state (used when switching/finishing).
   const resetActiveWorkout = useCallback(() => {
@@ -1630,14 +1748,17 @@ export default function App() {
           selectedExercise
             ? <ExerciseDetailView name={selectedExercise} history={state.history} settings={getExerciseSettings(state, selectedExercise)} onUpdateSettings={updateExerciseSettings} onBack={() => setSelectedExercise(null)} />
             : <>
-                <div style={{ fontSize: 22, fontWeight: 900, letterSpacing: 2, marginBottom: 6 }}>EXERCISES</div>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                  <div style={{ fontSize: 22, fontWeight: 900, letterSpacing: 2 }}>EXERCISES</div>
+                  <button onClick={() => setShowAddExercise(true)} style={{ padding: "8px 14px", background: "#c8f542", border: "none", borderRadius: 6, color: "#0a0a0a", fontWeight: 900, fontSize: 12, cursor: "pointer", letterSpacing: 1 }}>+ ADD</button>
+                </div>
                 <div style={{ fontSize: 11, color: "#707070", fontFamily: "monospace", marginBottom: 16 }}>tap an exercise for history, PRs & settings</div>
                 {allExerciseNames(state)
                   .map((exName) => ({ name: exName, st: getExerciseStats(state.history, exName) }))
                   .sort((a, b) => b.st.sessions.length - a.st.sessions.length || a.name.localeCompare(b.name))
                   .map(({ name: exName, st }) => {
-                  const lib = EXERCISE_LIBRARY.find((e) => e.name === exName);
-                  const c = lib ? CATEGORY_COLORS[lib.category] : "#888";
+                  const lib = exerciseList.find((e) => e.name === exName);
+                  const c = (lib && CATEGORY_COLORS[lib.category]) || "#888";
                   return (
                     <button key={exName} onClick={() => setSelectedExercise(exName)} style={{ display: "flex", width: "100%", justifyContent: "space-between", alignItems: "center", background: "#1c1c1c", border: "1px solid #383838", borderLeft: `3px solid ${c}`, borderRadius: 10, padding: "12px 16px", marginBottom: 8, cursor: "pointer", textAlign: "left" }}>
                       <div>
@@ -1653,7 +1774,7 @@ export default function App() {
 
         {view === "records" && <RecordsView history={state.history} />}
 
-        {view === "equipment" && <EquipmentView equipment={state.equipment} onUpdate={updateEquipment} />}
+        {view === "equipment" && <EquipmentView equipment={state.equipment} onUpdate={updateEquipment} notifPermission={notifPermission} onEnableNotifications={enableNotifications} />}
 
         {view === "programs" && <>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
@@ -1707,6 +1828,8 @@ export default function App() {
       {prCelebration && <PrCelebration prs={prCelebration} onClose={() => setPrCelebration(null)} />}
 
       {saveSession && <SaveWorkoutModal session={saveSession.session} exercises={saveSession.exercises} programs={state.programs} onSave={saveWorkoutAsProgram} onClose={() => setSaveSession(null)} />}
+
+      {showAddExercise && <AddExerciseModal existingNames={allExerciseNames(state)} onSave={addExerciseToLibrary} onClose={() => setShowAddExercise(false)} />}
     </div>
   );
 }
