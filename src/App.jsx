@@ -150,7 +150,7 @@ function getExerciseStats(history, name) {
     sets.forEach((set) => {
       const w = set.weight || 0, r = set.reps || 0;
       volume += w * r;
-      if (r === 1 && (!heaviestSingle || w > heaviestSingle.weight)) heaviestSingle = { weight: w, date: s.date };
+      if (r >= 1 && (!heaviestSingle || w > heaviestSingle.weight)) heaviestSingle = { weight: w, date: s.date };
       if (r === 3 && (!topThree || w > topThree.weight)) topThree = { weight: w, date: s.date };
       if (r === 5 && (!topFive || w > topFive.weight)) topFive = { weight: w, date: s.date };
     });
@@ -177,7 +177,7 @@ function computePrSetKeys(history) {
         const w = set.weight || 0, r = set.reps || 0;
         if (w <= 0) return;
         const key = `${s.date}|${ex.name}|${i}`;
-        if (r === 1 && w > (singleMax[ex.name] ?? 0)) { singleMax[ex.name] = w; keys.set(key, { ...keys.get(key), single: true }); curSingleKey[ex.name] = key; }
+        if (r >= 1 && w > (singleMax[ex.name] ?? 0)) { singleMax[ex.name] = w; keys.set(key, { ...keys.get(key), single: true }); curSingleKey[ex.name] = key; }
         if (r === 5 && w > (fiveMax[ex.name] ?? 0)) { fiveMax[ex.name] = w; keys.set(key, { ...keys.get(key), five: true }); curFiveKey[ex.name] = key; }
       });
     });
@@ -845,7 +845,7 @@ function RecordsView({ history }) {
             <div key={lift.label} style={{ background: "#181818", border: "1px solid #383838", borderLeft: `3px solid ${catColor}`, borderRadius: 10, padding: "14px 16px" }}>
               <div style={{ fontSize: 16, fontWeight: 800, color: "#e8e8e8", marginBottom: 10 }}>{lift.label}</div>
               <div style={{ display: "flex", gap: 10 }}>
-                <PrCard label="HEAVIEST SINGLE" value={single ? `${single.weight}lb` : ""} sub={single ? new Date(single.date).toLocaleDateString() : "no 1-rep sets logged"} />
+                <PrCard label="HEAVIEST SINGLE" value={single ? `${single.weight}lb` : ""} sub={single ? new Date(single.date).toLocaleDateString() : "no sets logged yet"} />
                 <PrCard label="TOP SET OF 5" value={five ? `${five.weight}lb` : ""} sub={five ? new Date(five.date).toLocaleDateString() : "no 5-rep sets logged"} />
               </div>
             </div>
@@ -1075,7 +1075,7 @@ function ExerciseDetailView({ name, history, settings, onUpdateSettings, onBack 
         <PrCard
           label="HEAVIEST SINGLE"
           value={stats.heaviestSingle ? `${stats.heaviestSingle.weight}lb` : ""}
-          sub={stats.heaviestSingle ? new Date(stats.heaviestSingle.date).toLocaleDateString() : "no 1-rep sets logged"}
+          sub={stats.heaviestSingle ? new Date(stats.heaviestSingle.date).toLocaleDateString() : "no sets logged yet"}
         />
         <PrCard
           label="TOP SET OF 5"
@@ -1771,7 +1771,7 @@ export default function App() {
       let newSingle = 0, newFive = 0;
       sets.forEach((s) => {
         const w = s.weight || 0, r = s.reps || 0;
-        if (r === 1 && w > newSingle) newSingle = w;
+        if (r >= 1 && w > newSingle) newSingle = w;
         if (r === 5 && w > newFive) newFive = w;
       });
       const prior = getExerciseStats(state.history, ex.name);
