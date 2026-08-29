@@ -209,14 +209,27 @@ function calcPlateLoading(targetWeight, barWeight, plates) {
   return Math.abs(rem) < 0.01 ? result : null;
 }
 
-function calcWarmupSets(workingWeight, barWeight, protocol = WARMUP_PROTOCOL, rounding = 2.5) {
+// The editable "base" list of warmup rows: a leading bar-only row, then the
+// protocol's percentage rows. Each row carries { pct, reps, weight, barOnly },
+// where a null `weight` means "derive from pct × working weight" (auto-tracks
+// the working weight) and a non-null `weight` is an explicit manual override.
+function defaultWarmupRows(protocol = WARMUP_PROTOCOL) {
+  return [
+    { pct: null, reps: 10, weight: null, barOnly: true },
+    ...protocol.map(({ pct, reps }) => ({ pct, reps, weight: null })),
+  ];
+}
+
+// Resolve a base row list into concrete { pct, reps, weight, barOnly } rows,
+// computing each weight from its percentage unless a manual weight is set.
+function resolveWarmupRows(rows, workingWeight, barWeight, rounding = 2.5) {
   const unit = rounding > 0 ? rounding : 2.5;
-  const pctSets = protocol.map(({ pct, reps }) => ({
-    pct, reps,
-    weight: Math.max(Math.round(workingWeight * pct / unit) * unit, barWeight),
-  }));
-  // Always start with an empty-bar set for 10 reps, then ramp up by percentage.
-  return [{ pct: null, reps: 10, weight: barWeight, barOnly: true }, ...pctSets];
+  return rows.map((row) => {
+    const auto = row.barOnly || row.pct == null
+      ? barWeight
+      : Math.max(Math.round(workingWeight * row.pct / unit) * unit, barWeight);
+    return { ...row, weight: row.weight != null ? row.weight : auto };
+  });
 }
 
 const CATEGORY_COLORS = { Lower: "#7eb8f7", Upper: "#c8f542", Power: "#f7a07e" };
@@ -372,7 +385,7 @@ const initialState = () => {
 // closing the app. Kept apart from the main state to avoid re-serializing the
 // full history on every set edit.
 const ACTIVE_KEY = "strengthtracker_active";
-const emptyActive = () => ({ completedSets: {}, warmupDone: {}, lightDays: {}, isCustomMode: true });
+const emptyActive = () => ({ completedSets: {}, warmupDone: {}, warmupOverrides: {}, lightDays: {}, isCustomMode: true });
 const loadActive = () => {
   try {
     const saved = localStorage.getItem(ACTIVE_KEY);
@@ -434,38 +447,100 @@ function PlateLoadingDisplay({ weight, barWeight, plates }) {
   );
 }
 
-function WarmupSection({ workingWeight, equipment, protocol, rounding, initialDone, onDoneChange }) {
+function WarmupSection({ workingWeight, equipment, protocol, rounding, initialDone, onDoneChange, override, onOverrideChange }) {
   const [open, setOpen] = useState(true);
+  const [editing, setEditing] = useState(false);
   const [done, setDone] = useState(() => initialDone || {});
-  const [repsOverride, setRepsOverride] = useState({});
   useEffect(() => { onDoneChange?.(done); }, [done, onDoneChange]);
   const bar = equipment.bars.find((b) => b.name === equipment.activeBar) || equipment.bars[0];
-  const sets = calcWarmupSets(workingWeight, bar.weight, protocol, rounding);
+
+  // The base rows (pct/reps/manual-weight) come from the current-workout
+  // override if the user has adjusted anything, otherwise from the exercise's
+  // saved protocol. Resolving turns percentages into concrete weights.
+  const baseRows = override || defaultWarmupRows(protocol);
+  const sets = resolveWarmupRows(baseRows, workingWeight, bar.weight, rounding);
+  const customized = !!override;
+
   const toggle = (i) => setDone((d) => ({ ...d, [i]: !d[i] }));
   const doneCount = sets.filter((_, i) => done[i]).length;
+
+  // Edits below are ephemeral: they write a workout-local override and never
+  // touch the exercise's saved settings.
+  const commit = (rows) => onOverrideChange?.(rows.map((r) => ({ pct: r.pct, reps: r.reps, weight: r.weight, barOnly: r.barOnly })));
+  const editRow = (i, patch) => commit(baseRows.map((r, idx) => idx === i ? { ...r, ...patch } : r));
+  // Changing the percentage clears any manual weight so it tracks the % again.
+  const setPct = (i, pctInt) => editRow(i, { pct: pctInt / 100, weight: null });
+  const setWeight = (i, w) => editRow(i, { weight: w });
+  const setReps = (i, r) => editRow(i, { reps: r });
+  const addRow = () => {
+    const last = baseRows[baseRows.length - 1] || { pct: 0.5, reps: 5 };
+    commit([...baseRows, { pct: Math.min(1, (last.pct ?? 0.5) + 0.1), reps: last.reps ?? 5, weight: null }]);
+  };
+  const removeRow = (i) => {
+    commit(baseRows.filter((_, idx) => idx !== i));
+    // Re-index completion flags so later rows keep their checked state.
+    setDone((d) => { const next = {}; Object.keys(d).forEach((k) => { const n = Number(k); if (n < i) next[n] = d[k]; else if (n > i) next[n - 1] = d[k]; }); return next; });
+  };
+  const resetWarmup = () => { onOverrideChange?.(null); setDone({}); };
+
   const repInp = { background: "#111", border: "1px solid #3c3c3c", borderRadius: 4, color: "#e0e0e0", textAlign: "center", fontSize: 12, fontWeight: 700, padding: "2px 0", fontFamily: "monospace", width: 30, outline: "none" };
+  const editInp = { background: "#111", border: "1px solid #3c3c3c", borderRadius: 4, color: "#e0e0e0", textAlign: "center", fontSize: 12, fontWeight: 700, padding: "3px 0", fontFamily: "monospace", outline: "none" };
   return (
     <div style={{ marginBottom: 10 }}>
-      <button onClick={() => setOpen((o) => !o)} style={{ background: "none", border: `1px solid ${WARMUP_COLOR}55`, borderRadius: 4, color: WARMUP_COLOR, cursor: "pointer", fontFamily: "monospace", fontSize: 9, padding: "4px 10px", letterSpacing: 1 }}>
-        {open ? "▲ WARMUP" : "▼ WARMUP"} <span style={{ color: doneCount === sets.length ? WARMUP_COLOR : "#707070" }}>{doneCount}/{sets.length}</span>
-      </button>
+      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <button onClick={() => setOpen((o) => !o)} style={{ background: "none", border: `1px solid ${WARMUP_COLOR}55`, borderRadius: 4, color: WARMUP_COLOR, cursor: "pointer", fontFamily: "monospace", fontSize: 9, padding: "4px 10px", letterSpacing: 1 }}>
+          {open ? "▲ WARMUP" : "▼ WARMUP"} <span style={{ color: doneCount === sets.length ? WARMUP_COLOR : "#707070" }}>{doneCount}/{sets.length}</span>
+        </button>
+        {open && (
+          <button onClick={() => setEditing((e) => !e)} style={{ background: editing ? `${WARMUP_COLOR}18` : "none", border: `1px solid ${editing ? WARMUP_COLOR : "#3c3c3c"}`, borderRadius: 4, color: editing ? WARMUP_COLOR : "#909090", cursor: "pointer", fontFamily: "monospace", fontSize: 9, padding: "4px 10px", letterSpacing: 1 }}>{editing ? "✓ DONE" : "✎ EDIT"}</button>
+        )}
+        {open && customized && (
+          <button onClick={resetWarmup} title="Reset to this exercise's saved warmup" style={{ background: "none", border: "1px solid #3c3c3c", borderRadius: 4, color: "#909090", cursor: "pointer", fontFamily: "monospace", fontSize: 9, padding: "4px 8px", letterSpacing: 1 }}>RESET</button>
+        )}
+      </div>
+      {open && editing && (
+        <div style={{ fontSize: 9, color: "#707070", fontFamily: "monospace", marginTop: 6, marginBottom: 2 }}>adjust % · weight · reps · sets — applies to this workout only</div>
+      )}
       {open && (
         <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 4 }}>
           {sets.map(({ pct, reps, weight, barOnly }, i) => (
             <div key={i} style={{ background: done[i] ? "rgba(244,143,177,0.08)" : "#1d1d1d", border: `1px solid ${done[i] ? WARMUP_COLOR : "#383838"}`, borderLeft: `3px solid ${WARMUP_COLOR}`, borderRadius: 6, padding: "7px 10px 7px 12px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, transition: "all 0.15s" }}>
-              <div style={{ display: "flex", gap: 8, alignItems: "center", minWidth: 0 }}>
-                <span style={{ color: WARMUP_COLOR, fontFamily: "monospace", fontSize: 10, minWidth: 28 }}>{barOnly ? "BAR" : `${Math.round(pct * 100)}%`}</span>
-                <span style={{ color: "#c0c0c0", fontWeight: 700, fontSize: 13 }}>{weight}lb</span>
-                <span style={{ color: "#707070", fontFamily: "monospace", fontSize: 10 }}>×</span>
-                <NumberInput integer value={repsOverride[i] ?? reps} onChange={(n) => setRepsOverride((r) => ({ ...r, [i]: n }))} style={repInp} />
-                <span style={{ color: "#707070", fontFamily: "monospace", fontSize: 10 }}>r</span>
-              </div>
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <PlateLoadingDisplay weight={weight} barWeight={bar.weight} plates={equipment.plates} />
-                <button onClick={() => toggle(i)} style={{ width: 28, height: 28, borderRadius: 6, border: `2px solid ${done[i] ? WARMUP_COLOR : "#4a4a4a"}`, background: done[i] ? WARMUP_COLOR : "transparent", color: done[i] ? "#0a0a0a" : "#4a4a4a", fontSize: 14, cursor: "pointer", transition: "all 0.15s", flexShrink: 0 }}>{done[i] ? "✓" : ""}</button>
-              </div>
+              {editing ? (
+                <>
+                  <div style={{ display: "flex", gap: 6, alignItems: "center", minWidth: 0, flexWrap: "wrap" }}>
+                    {barOnly
+                      ? <span style={{ color: WARMUP_COLOR, fontFamily: "monospace", fontSize: 10, minWidth: 28 }}>BAR</span>
+                      : <span style={{ display: "flex", alignItems: "center", gap: 2 }}>
+                          <NumberInput integer value={Math.round(pct * 100)} onChange={(n) => setPct(i, n)} style={{ ...editInp, width: 34 }} />
+                          <span style={{ color: "#707070", fontFamily: "monospace", fontSize: 10 }}>%</span>
+                        </span>}
+                    <NumberInput value={weight} onChange={(n) => setWeight(i, n)} style={{ ...editInp, width: 48 }} />
+                    <span style={{ color: "#707070", fontFamily: "monospace", fontSize: 10 }}>lb×</span>
+                    <NumberInput integer value={reps} onChange={(n) => setReps(i, n)} style={{ ...editInp, width: 34 }} />
+                    <span style={{ color: "#707070", fontFamily: "monospace", fontSize: 10 }}>r</span>
+                  </div>
+                  <button onClick={() => removeRow(i)} disabled={sets.length <= 1} title="Remove this warmup set" style={{ width: 28, height: 28, borderRadius: 6, border: "1px solid #3c3c3c", background: "#1e1e1e", color: sets.length <= 1 ? "#3c3c3c" : "#e05252", cursor: sets.length <= 1 ? "default" : "pointer", fontSize: 13, flexShrink: 0 }}>✕</button>
+                </>
+              ) : (
+                <>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center", minWidth: 0 }}>
+                    <span style={{ color: WARMUP_COLOR, fontFamily: "monospace", fontSize: 10, minWidth: 28 }}>{barOnly ? "BAR" : `${Math.round(pct * 100)}%`}</span>
+                    <span style={{ color: "#c0c0c0", fontWeight: 700, fontSize: 13 }}>{weight}lb</span>
+                    <span style={{ color: "#707070", fontFamily: "monospace", fontSize: 10 }}>×</span>
+                    <NumberInput integer value={reps} onChange={(n) => setReps(i, n)} style={repInp} />
+                    <span style={{ color: "#707070", fontFamily: "monospace", fontSize: 10 }}>r</span>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <PlateLoadingDisplay weight={weight} barWeight={bar.weight} plates={equipment.plates} />
+                    <button onClick={() => toggle(i)} style={{ width: 28, height: 28, borderRadius: 6, border: `2px solid ${done[i] ? WARMUP_COLOR : "#4a4a4a"}`, background: done[i] ? WARMUP_COLOR : "transparent", color: done[i] ? "#0a0a0a" : "#4a4a4a", fontSize: 14, cursor: "pointer", transition: "all 0.15s", flexShrink: 0 }}>{done[i] ? "✓" : ""}</button>
+                  </div>
+                </>
+              )}
             </div>
           ))}
+          {editing && (
+            <button onClick={addRow} style={{ width: "100%", padding: "6px 0", background: "transparent", border: "1px dashed #3c3c3c", borderRadius: 6, color: "#808080", cursor: "pointer", fontFamily: "monospace", fontSize: 10, letterSpacing: 1 }}>+ ADD WARMUP SET</button>
+          )}
         </div>
       )}
     </div>
@@ -551,7 +626,7 @@ function SetTracker({ sets, defaultReps, defaultWeight, onUpdate, initialSets, e
   );
 }
 
-function ExerciseCard({ exercise, weight, onWeightChange, onComplete, equipment, settings, onOpenDetail, allowLightDay, lightDay, onLightDayToggle, initialSets, warmupDone, onWarmupDone }) {
+function ExerciseCard({ exercise, weight, onWeightChange, onComplete, equipment, settings, onOpenDetail, allowLightDay, lightDay, onLightDayToggle, initialSets, warmupDone, onWarmupDone, warmupOverride, onWarmupOverride }) {
   const initialDone = !!(initialSets && initialSets.length && initialSets.every((s) => s.completed));
   const [done, setDone] = useState(initialDone);
   const lib = EXERCISE_LIBRARY.find((e) => e.name === exercise.name);
@@ -562,6 +637,7 @@ function ExerciseCard({ exercise, weight, onWeightChange, onComplete, equipment,
     onComplete(exercise.name, isDone, setsData);
   }, [onComplete, exercise.name]);
   const handleWarmupDone = useCallback((d) => onWarmupDone(exercise.name, d), [onWarmupDone, exercise.name]);
+  const handleWarmupOverride = useCallback((rows) => onWarmupOverride?.(exercise.name, rows), [onWarmupOverride, exercise.name]);
 
   // Light day: 85% of the top weight, rounded to the exercise's increment, at 5
   // reps — applied to both the work sets and the warmup calculation.
@@ -598,7 +674,7 @@ function ExerciseCard({ exercise, weight, onWeightChange, onComplete, equipment,
           </div>
         </div>
       </div>
-      {equipment && effWeight > 0 && <div style={{ marginTop: 12 }}><WarmupSection key={on ? "light" : "full"} workingWeight={effWeight} equipment={equipment} protocol={settings?.warmup} rounding={increment} initialDone={warmupDone} onDoneChange={handleWarmupDone} /></div>}
+      {equipment && effWeight > 0 && <div style={{ marginTop: 12 }}><WarmupSection key={on ? "light" : "full"} workingWeight={effWeight} equipment={equipment} protocol={settings?.warmup} rounding={increment} initialDone={warmupDone} onDoneChange={handleWarmupDone} override={warmupOverride} onOverrideChange={handleWarmupOverride} /></div>}
       <SetTracker sets={exercise.sets} defaultReps={effReps} defaultWeight={effWeight} onUpdate={handleUpdate} initialSets={initialSets} equipment={equipment} />
     </div>
   );
@@ -1557,6 +1633,7 @@ export default function App() {
   const [initActive] = useState(loadActive);
   const [completedSets, setCompletedSets] = useState(initActive.completedSets);
   const [warmupDone, setWarmupDone] = useState(initActive.warmupDone);
+  const [warmupOverrides, setWarmupOverrides] = useState(initActive.warmupOverrides || {});
   const [lightDays, setLightDays] = useState(initActive.lightDays);
   const [sessionKey, setSessionKey] = useState(0);
   const [showBuilder, setShowBuilder] = useState(false);
@@ -1637,8 +1714,8 @@ export default function App() {
 
   // Persist the in-progress workout so completed sets survive navigation/reload.
   useEffect(() => {
-    try { localStorage.setItem(ACTIVE_KEY, JSON.stringify({ completedSets, warmupDone, lightDays, isCustomMode })); } catch { /* ignore */ }
-  }, [completedSets, warmupDone, lightDays, isCustomMode]);
+    try { localStorage.setItem(ACTIVE_KEY, JSON.stringify({ completedSets, warmupDone, warmupOverrides, lightDays, isCustomMode })); } catch { /* ignore */ }
+  }, [completedSets, warmupDone, warmupOverrides, lightDays, isCustomMode]);
 
   // Warn before closing/reloading the tab while a workout is in progress.
   const workoutInProgress = hasActiveProgress(completedSets, warmupDone);
@@ -1718,13 +1795,19 @@ export default function App() {
 
   // Reset all in-progress workout state (used when switching/finishing).
   const resetActiveWorkout = useCallback(() => {
-    setCompletedSets({}); setWarmupDone({}); setLightDays({}); setSessionKey((k) => k + 1);
+    setCompletedSets({}); setWarmupDone({}); setWarmupOverrides({}); setLightDays({}); setSessionKey((k) => k + 1);
   }, []);
   const toggleLightDay = useCallback((name, value) => {
     setLightDays((p) => ({ ...p, [name]: value }));
     setWarmupDone((p) => ({ ...p, [name]: {} })); // warmup weights change, so reset its checkmarks
   }, []);
   const setWarmup = useCallback((name, d) => setWarmupDone((p) => (p[name] === d ? p : { ...p, [name]: d })), []);
+  // Per-exercise warmup adjustments for the current workout only (cleared when
+  // the workout is finished, switched, or reset). Passing null removes them.
+  const setWarmupOverride = useCallback((name, rows) => setWarmupOverrides((p) => {
+    if (rows == null) { if (!(name in p)) return p; const next = { ...p }; delete next[name]; return next; }
+    return { ...p, [name]: rows };
+  }), []);
 
   const exerciseList = useMemo(() => buildExerciseList(state), [state]);
   // Exercises for the custom-workout picker, ordered by how often each has been
@@ -1889,7 +1972,7 @@ export default function App() {
           {activeExercises.length === 0
             ? <div style={{ textAlign: "center", color: "#707070", padding: "60px 0", fontFamily: "monospace", fontSize: 12 }}>{inCustom ? "ADD EXERCISES ABOVE TO BEGIN" : "NO EXERCISES — GO TO PROGRAMS TAB"}</div>
             : <div style={{ display: "flex", flexDirection: "column", gap: 10 }} key={sessionKey}>
-                {activeExercises.map((ex) => <ExerciseCard key={ex.name} exercise={ex} weight={state.weights[ex.name] ?? 0} onWeightChange={(val) => updateWeight(ex.name, val)} onComplete={markComplete} equipment={state.equipment} settings={getExerciseSettings(state, ex.name)} onOpenDetail={openExerciseDetail} allowLightDay={inCustom} lightDay={!!lightDays[ex.name]} onLightDayToggle={toggleLightDay} initialSets={completedSets[ex.name]?.sets || ex.plan} warmupDone={warmupDone[ex.name]} onWarmupDone={setWarmup} />)}
+                {activeExercises.map((ex) => <ExerciseCard key={ex.name} exercise={ex} weight={state.weights[ex.name] ?? 0} onWeightChange={(val) => updateWeight(ex.name, val)} onComplete={markComplete} equipment={state.equipment} settings={getExerciseSettings(state, ex.name)} onOpenDetail={openExerciseDetail} allowLightDay={inCustom} lightDay={!!lightDays[ex.name]} onLightDayToggle={toggleLightDay} initialSets={completedSets[ex.name]?.sets || ex.plan} warmupDone={warmupDone[ex.name]} onWarmupDone={setWarmup} warmupOverride={warmupOverrides[ex.name]} onWarmupOverride={setWarmupOverride} />)}
               </div>
           }
           <button onClick={finishWorkout} disabled={!allDone} style={{ width: "100%", marginTop: 16, padding: 15, background: allDone ? "#c8f542" : "#161616", color: allDone ? "#0a0a0a" : "#777", border: `1px solid ${allDone ? "#c8f542" : "#181818"}`, borderRadius: 10, fontWeight: 900, fontSize: 14, letterSpacing: 2, cursor: allDone ? "pointer" : "not-allowed", transition: "all 0.2s" }}>{allDone ? "✓ FINISH & LOG WORKOUT" : "COMPLETE ALL SETS TO FINISH"}</button>
