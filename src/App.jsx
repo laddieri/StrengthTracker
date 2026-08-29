@@ -409,7 +409,30 @@ function normalizeImportExercise(raw, idx) {
   const setCount = plan ? plan.length : Math.max(1, Math.round(toFiniteNum(Array.isArray(raw.sets) ? null : raw.sets) ?? 3));
   const increment = Math.max(0, toFiniteNum(raw.increment ?? raw.step) ?? defaultIncrementFor(name));
   if (!plan) plan = Array.from({ length: setCount }, () => ({ weight, reps }));
-  return { name, sets: plan.length, reps, increment, weight, plan };
+
+  // Optional custom warmup rows (applied when loading a single workout). Each
+  // row is a percentage of the work weight, an explicit weight, or bar-only —
+  // matching the app's in-workout warmup override shape.
+  let warmup = null;
+  const wRaw = raw.warmup || raw.warmups || raw.warmupSets;
+  if (Array.isArray(wRaw) && wRaw.length) {
+    warmup = wRaw.map((w) => {
+      if (typeof w === "string") w = String(w).toLowerCase() === "bar" ? { bar: true } : { pct: toFiniteNum(w) };
+      if (!w || typeof w !== "object") return null;
+      const wReps = Math.max(1, Math.round(toFiniteNum(w.reps ?? w.rep) ?? 5));
+      if (w.barOnly === true || w.bar === true || String(w.pct ?? w.percent ?? "").toLowerCase() === "bar")
+        return { pct: null, reps: wReps, weight: null, barOnly: true };
+      const explicit = toFiniteNum(w.weight ?? w.lbs ?? w.load);
+      if (explicit != null) return { pct: null, reps: wReps, weight: Math.max(0, explicit) };
+      let pct = toFiniteNum(w.pct ?? w.percent ?? w.percentage);
+      if (pct == null) return null;
+      if (pct > 2) pct = pct / 100; // accept 40 or 0.4
+      return { pct: Math.max(0, pct), reps: wReps, weight: null };
+    }).filter(Boolean);
+    if (!warmup.length) warmup = null;
+  }
+
+  return { name, sets: plan.length, reps, increment, weight, plan, warmup };
 }
 
 function parseWorkoutImport(text) {
@@ -473,7 +496,8 @@ Reply with ONE JSON code block and nothing else, in this format:
 {
   "name": "Upper Body A",
   "exercises": [
-    { "name": "Bench Press", "sets": 3, "reps": 5, "weight": 135, "increment": 2.5 },
+    { "name": "Bench Press", "sets": 3, "reps": 5, "weight": 135, "increment": 2.5,
+      "warmup": [ { "bar": true, "reps": 10 }, { "pct": 50, "reps": 5 }, { "pct": 70, "reps": 3 } ] },
     { "name": "Overhead Press", "sets": 3, "reps": 8, "weight": 65 },
     { "name": "Barbell Curl", "setDetails": [ { "weight": 45, "reps": 10 }, { "weight": 55, "reps": 8 } ] }
   ]
@@ -483,13 +507,29 @@ Reply with ONE JSON code block and nothing else, in this format:
 Rules:
 - Per exercise, "name" is required. "sets", "reps", "weight" (lb) and "increment" (lb added each session) are optional — sets defaults to 3, reps to 5.
 - Use "setDetails" instead of sets/reps/weight when the sets differ from one another (e.g. ramping weight).
+- Optional "warmup" (single-workout imports) is a list of warmup sets, each { "pct": 50, "reps": 5 } (percent of the work weight), { "weight": 45, "reps": 5 } (explicit lb), or { "bar": true, "reps": 10 }. Omit it to use the app's automatic warmup ramp.
 - To build a multi-day program instead of a single workout, use a top-level "days" array: { "name": "My Split", "days": [ { "label": "A", "exercises": [ … ] }, { "label": "B", "exercises": [ … ] } ] }.
-- Prefer the exact exercise names from my list below so the app links history and PRs; brand-new names are fine and will be created.
+- Any exercise name works — brand-new lifts not in my list are created automatically; matching my existing names links their history and PRs.
 - All weights are in pounds.
 
 My exercises and recent numbers:
 ${lifts || "- (no history yet — pick sensible starting weights)"}
 `;
+}
+
+// Seed a per-exercise increment for brand-new (non-library) imported exercises
+// that have no saved settings yet, so their +/- step and auto-progression honor
+// the imported value instead of the generic default. Existing settings and
+// known library lifts are left untouched.
+function seedImportedIncrements(state, exercises) {
+  const next = { ...(state.exerciseSettings || {}) };
+  exercises.forEach((e) => {
+    const known = EXERCISE_LIBRARY.some((l) => l.name === e.name);
+    if (!known && !next[e.name] && e.increment > 0) {
+      next[e.name] = { ...getExerciseSettings(state, e.name), increment: e.increment };
+    }
+  });
+  return next;
 }
 
 const STORAGE_KEY = "strengthtracker_state";
@@ -1471,11 +1511,14 @@ function ImportModal({ existingHistory, onConfirm, onClose }) {
 
 // One exercise line in the workout-import preview. Shows per-set detail when
 // the sets vary, otherwise a compact sets×reps @ weight summary.
-function ImportExRow({ ex }) {
+function ImportExRow({ ex, showWarmup }) {
   const varied = ex.plan && ex.plan.some((s) => s.weight !== ex.plan[0].weight || s.reps !== ex.plan[0].reps);
   return (
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-      <span style={{ fontSize: 13, color: "#d0d0d0", fontWeight: 600 }}>{ex.name}</span>
+      <span style={{ fontSize: 13, color: "#d0d0d0", fontWeight: 600 }}>
+        {ex.name}
+        {showWarmup && ex.warmup?.length > 0 && <span style={{ color: WARMUP_COLOR, fontFamily: "monospace", fontSize: 9, marginLeft: 6 }}>+{ex.warmup.length} warmup</span>}
+      </span>
       <span style={{ fontSize: 11, color: "#808080", fontFamily: "monospace", textAlign: "right" }}>
         {varied
           ? ex.plan.map((s) => `${s.weight}×${s.reps}`).join(" · ")
@@ -1549,7 +1592,7 @@ function WorkoutImportModal({ state, onImportWorkout, onImportProgram, onClose }
 
           {result.type === "workout"
             ? <div style={{ ...box, display: "flex", flexDirection: "column", gap: 6 }}>
-                {result.exercises.map((ex) => <ImportExRow key={ex.name} ex={ex} />)}
+                {result.exercises.map((ex) => <ImportExRow key={ex.name} ex={ex} showWarmup />)}
               </div>
             : <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                 {result.days.map((d) => (
@@ -1893,8 +1936,12 @@ export default function App() {
   const importCustomWorkout = (result) => {
     if (workoutInProgress && !confirm("Discard your current in-progress workout and load this one?")) return;
     const exercises = result.exercises.map((e) => ({ name: e.name, sets: e.sets, reps: e.reps, increment: e.increment, plan: e.plan }));
-    setState((s) => ({ ...s, customWorkout: { exercises }, weights: { ...s.weights, ...result.weights } }));
+    setState((s) => ({ ...s, customWorkout: { exercises }, weights: { ...s.weights, ...result.weights }, exerciseSettings: seedImportedIncrements(s, result.exercises) }));
     resetActiveWorkout();
+    // Apply any custom warmups after the reset (which clears overrides).
+    const overrides = {};
+    result.exercises.forEach((e) => { if (e.warmup?.length) overrides[e.name] = e.warmup; });
+    if (Object.keys(overrides).length) setWarmupOverrides(overrides);
     setIsCustomMode(true);
     setShowWorkoutImport(false);
     setView("workout");
@@ -1907,6 +1954,7 @@ export default function App() {
       activeProgram: result.name,
       currentDayIndex: 0,
       weights: { ...s.weights, ...result.weights },
+      exerciseSettings: seedImportedIncrements(s, result.days.flatMap((d) => d.exercises)),
     }));
     resetActiveWorkout();
     setShowWorkoutImport(false);
