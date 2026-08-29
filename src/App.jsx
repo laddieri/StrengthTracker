@@ -371,6 +371,127 @@ function buildImportSessions(parsed, mapping) {
   return sessions.sort((a, b) => a.date - b.date);
 }
 
+// ---- Claude workout import (paste JSON) -----------------------------------
+// A companion format for programming a workout in a separate Claude chat and
+// importing it here. The other assistant produces a small JSON payload; this
+// normalizes it into either a ready-to-perform custom workout (an `exercises`
+// list) or a saved multi-day program (a `days` list). Field names are matched
+// leniently so the generated JSON doesn't have to be pixel-perfect.
+const toFiniteNum = (v) => {
+  if (typeof v === "number") return Number.isFinite(v) ? v : null;
+  if (typeof v === "string" && v.trim() !== "" && Number.isFinite(Number(v))) return Number(v);
+  return null;
+};
+
+function normalizeImportExercise(raw, idx) {
+  if (typeof raw === "string") raw = { name: raw };
+  if (!raw || typeof raw !== "object") throw new Error(`Exercise #${idx + 1} isn't valid.`);
+  const name = String(raw.name ?? raw.exercise ?? raw.lift ?? "").trim();
+  if (!name) throw new Error(`Exercise #${idx + 1} is missing a "name".`);
+
+  // Optional explicit per-set list. `sets` may itself be that list.
+  const detail = raw.setDetails || raw.setsData || raw.plan || (Array.isArray(raw.sets) ? raw.sets : null);
+  let plan = null;
+  if (Array.isArray(detail) && detail.length && typeof detail[0] === "object") {
+    plan = detail.map((s) => ({
+      weight: Math.max(0, toFiniteNum(s.weight ?? s.lbs ?? s.load) ?? 0),
+      reps: Math.max(1, Math.round(toFiniteNum(s.reps ?? s.rep) ?? 5)),
+    }));
+  }
+
+  let reps = Math.max(1, Math.round(toFiniteNum(raw.reps ?? raw.rep) ?? 5));
+  if (plan) {
+    const freq = {};
+    plan.forEach((s) => { freq[s.reps] = (freq[s.reps] || 0) + 1; });
+    reps = Number(Object.entries(freq).sort((a, b) => b[1] - a[1])[0][0]);
+  }
+  const weight = Math.max(0, toFiniteNum(raw.weight ?? raw.lbs ?? raw.load) ?? (plan ? Math.max(...plan.map((s) => s.weight)) : 0));
+  const setCount = plan ? plan.length : Math.max(1, Math.round(toFiniteNum(Array.isArray(raw.sets) ? null : raw.sets) ?? 3));
+  const increment = Math.max(0, toFiniteNum(raw.increment ?? raw.step) ?? defaultIncrementFor(name));
+  if (!plan) plan = Array.from({ length: setCount }, () => ({ weight, reps }));
+  return { name, sets: plan.length, reps, increment, weight, plan };
+}
+
+function parseWorkoutImport(text) {
+  const trimmed = (text || "").trim();
+  if (!trimmed) throw new Error("Paste the workout JSON to preview it.");
+  // Tolerate a pasted markdown ```json fenced block.
+  let body = trimmed;
+  const fence = body.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fence) body = fence[1].trim();
+  let data;
+  try { data = JSON.parse(body); }
+  catch { throw new Error("That isn't valid JSON — copy the whole { … } block Claude produced."); }
+
+  if (Array.isArray(data)) data = { exercises: data }; // a bare array = a workout
+  if (!data || typeof data !== "object") throw new Error("Expected a JSON object.");
+
+  if (Array.isArray(data.days)) {
+    if (!data.days.length) throw new Error("This program has no days.");
+    const name = String(data.name ?? data.program ?? data.title ?? "Imported Program").trim() || "Imported Program";
+    const weights = {};
+    const days = data.days.map((d, di) => {
+      const fallback = String.fromCharCode(65 + di);
+      const label = String(d.label ?? d.day ?? fallback).trim().slice(0, 3).toUpperCase() || fallback;
+      const exRaw = d.exercises || d.lifts || [];
+      if (!Array.isArray(exRaw) || !exRaw.length) throw new Error(`Day "${label}" has no exercises.`);
+      const exercises = exRaw.map((e, ei) => normalizeImportExercise(e, ei));
+      exercises.forEach((e) => { if (e.weight > 0) weights[e.name] = e.weight; });
+      return { id: uid(), label, exercises };
+    });
+    return { type: "program", name, days, weights };
+  }
+
+  const exRaw = data.exercises || data.lifts;
+  if (!Array.isArray(exRaw) || !exRaw.length) throw new Error('Expected an "exercises" array — or a "days" array for a multi-day program.');
+  const name = String(data.name ?? data.title ?? "Imported Workout").trim() || "Imported Workout";
+  const exercises = exRaw.map((e, ei) => normalizeImportExercise(e, ei));
+  const weights = {};
+  exercises.forEach((e) => { if (e.weight > 0) weights[e.name] = e.weight; });
+  return { type: "workout", name, exercises, weights };
+}
+
+// Build a ready-to-paste prompt for another Claude chat: the JSON contract plus
+// the user's own lifts and recent numbers, so the generated workout uses real
+// exercise names and sensible starting weights.
+function buildClaudePrompt(state) {
+  const lifts = allExerciseNames(state).map((n) => {
+    const st = getExerciseStats(state.history, n);
+    const bits = [];
+    const w = state.weights?.[n];
+    if (w != null && w > 0) bits.push(`working ~${w}lb`);
+    if (st.heaviestSingle) bits.push(`1RM ${st.heaviestSingle.weight}lb`);
+    if (st.topFive) bits.push(`5RM ${st.topFive.weight}lb`);
+    return `- ${n}${bits.length ? ` — ${bits.join(", ")}` : ""}`;
+  }).join("\n");
+
+  return `I use a strength-training app and want you to program a workout for me to import into it.
+
+Reply with ONE JSON code block and nothing else, in this format:
+
+\`\`\`json
+{
+  "name": "Upper Body A",
+  "exercises": [
+    { "name": "Bench Press", "sets": 3, "reps": 5, "weight": 135, "increment": 2.5 },
+    { "name": "Overhead Press", "sets": 3, "reps": 8, "weight": 65 },
+    { "name": "Barbell Curl", "setDetails": [ { "weight": 45, "reps": 10 }, { "weight": 55, "reps": 8 } ] }
+  ]
+}
+\`\`\`
+
+Rules:
+- Per exercise, "name" is required. "sets", "reps", "weight" (lb) and "increment" (lb added each session) are optional — sets defaults to 3, reps to 5.
+- Use "setDetails" instead of sets/reps/weight when the sets differ from one another (e.g. ramping weight).
+- To build a multi-day program instead of a single workout, use a top-level "days" array: { "name": "My Split", "days": [ { "label": "A", "exercises": [ … ] }, { "label": "B", "exercises": [ … ] } ] }.
+- Prefer the exact exercise names from my list below so the app links history and PRs; brand-new names are fine and will be created.
+- All weights are in pounds.
+
+My exercises and recent numbers:
+${lifts || "- (no history yet — pick sensible starting weights)"}
+`;
+}
+
 const STORAGE_KEY = "strengthtracker_state";
 const initialState = () => {
   try {
@@ -1348,6 +1469,109 @@ function ImportModal({ existingHistory, onConfirm, onClose }) {
   );
 }
 
+// One exercise line in the workout-import preview. Shows per-set detail when
+// the sets vary, otherwise a compact sets×reps @ weight summary.
+function ImportExRow({ ex }) {
+  const varied = ex.plan && ex.plan.some((s) => s.weight !== ex.plan[0].weight || s.reps !== ex.plan[0].reps);
+  return (
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+      <span style={{ fontSize: 13, color: "#d0d0d0", fontWeight: 600 }}>{ex.name}</span>
+      <span style={{ fontSize: 11, color: "#808080", fontFamily: "monospace", textAlign: "right" }}>
+        {varied
+          ? ex.plan.map((s) => `${s.weight}×${s.reps}`).join(" · ")
+          : `${ex.sets}×${ex.reps}${ex.weight > 0 ? ` @ ${ex.weight}lb` : ""}`}
+        {ex.increment > 0 && <span style={{ color: "#606060" }}> · +{ex.increment}</span>}
+      </span>
+    </div>
+  );
+}
+
+// Import a workout or program built in another Claude chat. Provides a
+// one-click prompt (pre-filled with the user's lifts) to hand to Claude, then
+// parses the JSON it returns and previews it before loading.
+function WorkoutImportModal({ state, onImportWorkout, onImportProgram, onClose }) {
+  const [text, setText] = useState("");
+  const [copied, setCopied] = useState(false);
+  const [showSpec, setShowSpec] = useState(false);
+
+  const { result, error } = useMemo(() => {
+    if (!text.trim()) return { result: null, error: "" };
+    try { return { result: parseWorkoutImport(text), error: "" }; }
+    catch (e) { return { result: null, error: e.message || "Could not parse." }; }
+  }, [text]);
+
+  const prompt = useMemo(() => buildClaudePrompt(state), [state]);
+  const copyPrompt = async () => {
+    try {
+      await navigator.clipboard.writeText(prompt);
+      setCopied(true); setTimeout(() => setCopied(false), 1800);
+    } catch { setShowSpec(true); } // clipboard blocked — reveal it for manual copy
+  };
+  const confirm = () => {
+    if (!result) return;
+    if (result.type === "program") onImportProgram(result); else onImportWorkout(result);
+  };
+
+  const box = { background: "#1c1c1c", border: "1px solid #383838", borderRadius: 8, padding: "10px 12px" };
+  const label = { fontSize: 10, color: "#808080", fontFamily: "monospace", letterSpacing: 1, marginBottom: 8 };
+  const programExists = result?.type === "program" && !!state.programs?.[result.name];
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.97)", zIndex: 100, overflowY: "auto" }}>
+      <div style={{ maxWidth: 600, margin: "0 auto", padding: "20px 16px 100px" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+          <div style={{ fontSize: 20, fontWeight: 900, color: "#c8f542", letterSpacing: 2 }}>IMPORT WORKOUT</div>
+          <button onClick={onClose} style={{ background: "none", border: "none", color: "#909090", cursor: "pointer", fontSize: 24, padding: "4px 8px" }}>✕</button>
+        </div>
+
+        <div style={{ fontSize: 11, color: "#909090", fontFamily: "monospace", lineHeight: 1.6, marginBottom: 12 }}>
+          Have another Claude chat design a workout, then paste its JSON below. Copy the prompt to tell Claude exactly what to build — it already includes your exercises and recent weights.
+        </div>
+
+        <button onClick={copyPrompt} style={{ width: "100%", padding: 12, background: copied ? "rgba(200,245,66,0.14)" : "#1e1e1e", border: `1px solid ${copied ? "#c8f542" : "#3c3c3c"}`, borderRadius: 8, color: "#c8f542", cursor: "pointer", fontFamily: "monospace", fontSize: 12, fontWeight: 700, letterSpacing: 1, marginBottom: 8 }}>
+          {copied ? "✓ COPIED — PASTE IT TO CLAUDE" : "⧉ COPY PROMPT FOR CLAUDE"}
+        </button>
+        <button onClick={() => setShowSpec((v) => !v)} style={{ background: "none", border: "none", color: "#707070", cursor: "pointer", fontFamily: "monospace", fontSize: 10, marginBottom: 14, padding: 0 }}>{showSpec ? "▲ hide prompt" : "▼ view / copy the prompt manually"}</button>
+        {showSpec && (
+          <textarea readOnly value={prompt} onFocus={(e) => e.target.select()} style={{ width: "100%", height: 180, background: "#080808", border: "1px solid #3c3c3c", borderRadius: 8, color: "#b0b0b0", fontFamily: "monospace", fontSize: 10, padding: 10, marginBottom: 14, outline: "none", resize: "vertical", boxSizing: "border-box" }} />
+        )}
+
+        <div style={label}>PASTE WORKOUT JSON</div>
+        <textarea autoFocus value={text} onChange={(e) => setText(e.target.value)} placeholder={'{ "name": "Upper A", "exercises": [ { "name": "Bench Press", "sets": 3, "reps": 5, "weight": 135 } ] }'} style={{ width: "100%", height: 150, background: "#080808", border: `1px solid ${error ? "#e05252" : "#3c3c3c"}`, borderRadius: 8, color: "#e0e0e0", fontFamily: "monospace", fontSize: 12, padding: 10, outline: "none", resize: "vertical", boxSizing: "border-box" }} />
+
+        {error && <div style={{ background: "rgba(224,82,82,0.1)", border: "1px solid #e05252", borderRadius: 8, padding: "10px 14px", color: "#e05252", fontFamily: "monospace", fontSize: 11, marginTop: 10 }}>{error}</div>}
+
+        {result && <>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "16px 0 10px" }}>
+            <span style={{ fontSize: 9, fontFamily: "monospace", color: "#0a0a0a", background: "#c8f542", borderRadius: 3, padding: "2px 7px", fontWeight: 700, letterSpacing: 1 }}>{result.type === "program" ? "PROGRAM" : "WORKOUT"}</span>
+            <span style={{ fontSize: 15, fontWeight: 800, color: "#e8e8e8" }}>{result.name}</span>
+          </div>
+
+          {result.type === "workout"
+            ? <div style={{ ...box, display: "flex", flexDirection: "column", gap: 6 }}>
+                {result.exercises.map((ex) => <ImportExRow key={ex.name} ex={ex} />)}
+              </div>
+            : <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {result.days.map((d) => (
+                  <div key={d.id} style={box}>
+                    <div style={{ fontSize: 12, fontWeight: 800, color: "#c8f542", marginBottom: 6 }}>DAY {d.label}</div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>{d.exercises.map((ex) => <ImportExRow key={ex.name} ex={ex} />)}</div>
+                  </div>
+                ))}
+              </div>}
+
+          {programExists && <div style={{ fontSize: 10, color: "#f7a07e", fontFamily: "monospace", marginTop: 10 }}>A program named "{result.name}" already exists — importing replaces it.</div>}
+
+          <button onClick={confirm} style={{ width: "100%", marginTop: 16, padding: 16, background: "#c8f542", border: "none", borderRadius: 8, color: "#0a0a0a", fontWeight: 900, fontSize: 14, letterSpacing: 2, cursor: "pointer" }}>
+            {result.type === "program" ? "ADD PROGRAM" : "LOAD WORKOUT →"}
+          </button>
+          {result.type === "workout" && <div style={{ textAlign: "center", marginTop: 6, color: "#707070", fontSize: 10, fontFamily: "monospace" }}>loads as a custom workout, ready to perform</div>}
+        </>}
+      </div>
+    </div>
+  );
+}
+
 const FIREWORK_COLORS = ["#c8f542", "#f48fb1", "#7eb8f7", "#f7a07e", "#ffd54f", "#ffffff"];
 
 function makeFireworkBursts() {
@@ -1642,6 +1866,7 @@ export default function App() {
   const [isCustomMode, setIsCustomMode] = useState(initActive.isCustomMode);
   const [selectedExercise, setSelectedExercise] = useState(null);
   const [showImport, setShowImport] = useState(false);
+  const [showWorkoutImport, setShowWorkoutImport] = useState(false);
   const [prCelebration, setPrCelebration] = useState(null);
   const [saveSession, setSaveSession] = useState(null);
   const [historyMode, setHistoryMode] = useState("list");
@@ -1661,6 +1886,31 @@ export default function App() {
     }));
     setShowImport(false);
     setView("history");
+  };
+
+  // Load a workout built in another Claude chat as a fresh custom workout,
+  // ready to perform (per-set weights/reps come from the payload's plan).
+  const importCustomWorkout = (result) => {
+    if (workoutInProgress && !confirm("Discard your current in-progress workout and load this one?")) return;
+    const exercises = result.exercises.map((e) => ({ name: e.name, sets: e.sets, reps: e.reps, increment: e.increment, plan: e.plan }));
+    setState((s) => ({ ...s, customWorkout: { exercises }, weights: { ...s.weights, ...result.weights } }));
+    resetActiveWorkout();
+    setIsCustomMode(true);
+    setShowWorkoutImport(false);
+    setView("workout");
+  };
+  // Save a program built in another Claude chat and make it active.
+  const importProgramFromClaude = (result) => {
+    setState((s) => ({
+      ...s,
+      programs: { ...s.programs, [result.name]: result.days.map((d) => ({ id: d.id, label: d.label, exercises: d.exercises.map((e) => ({ name: e.name, sets: e.sets, reps: e.reps, increment: e.increment })) })) },
+      activeProgram: result.name,
+      currentDayIndex: 0,
+      weights: { ...s.weights, ...result.weights },
+    }));
+    resetActiveWorkout();
+    setShowWorkoutImport(false);
+    setView("programs");
   };
 
   const openSaveWorkout = (session) => setSaveSession({ session, exercises: sessionToProgramExercises(session, state) });
@@ -1754,7 +2004,7 @@ export default function App() {
   // home tab) is a "layer"; we mirror the layer count into browser history so
   // Android back / swipe unwinds them instead of closing the app.
   const navLayers = [
-    prCelebration, configExercise, saveSession, showAddExercise, showImport, showBuilder, showPicker,
+    prCelebration, configExercise, saveSession, showAddExercise, showImport, showWorkoutImport, showBuilder, showPicker,
     view === "exercises" && !!selectedExercise, view !== "workout",
   ];
   const navDepth = navLayers.filter(Boolean).length;
@@ -1765,6 +2015,7 @@ export default function App() {
     if (saveSession) return setSaveSession(null);
     if (showAddExercise) return setShowAddExercise(false);
     if (showImport) return setShowImport(false);
+    if (showWorkoutImport) return setShowWorkoutImport(false);
     if (showBuilder) { setShowBuilder(false); setEditingProgram(null); return; }
     if (showPicker) return setShowPicker(false);
     if (view === "exercises" && selectedExercise) return setSelectedExercise(null);
@@ -1930,7 +2181,10 @@ export default function App() {
             <div style={{ background: "#181818", border: "1px solid #383838", borderRadius: 10, padding: "12px 16px", marginBottom: 14 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
                 <div style={{ fontSize: 13, fontWeight: 800, letterSpacing: 2, color: "#c8f542" }}>WORKOUT</div>
-                {state.programMode && <button onClick={() => { setIsCustomMode(false); resetActiveWorkout(); }} style={{ background: "none", border: "1px solid #383838", borderRadius: 5, color: "#909090", cursor: "pointer", padding: "5px 10px", fontFamily: "monospace", fontSize: 10 }}>← PROGRAM</button>}
+                <div style={{ display: "flex", gap: 6 }}>
+                  <button onClick={() => setShowWorkoutImport(true)} title="Import a workout built in another Claude chat" style={{ background: "none", border: "1px solid #383838", borderRadius: 5, color: "#c8f542", cursor: "pointer", padding: "5px 10px", fontFamily: "monospace", fontSize: 10, fontWeight: 700, letterSpacing: 1 }}>↓ IMPORT</button>
+                  {state.programMode && <button onClick={() => { setIsCustomMode(false); resetActiveWorkout(); }} style={{ background: "none", border: "1px solid #383838", borderRadius: 5, color: "#909090", cursor: "pointer", padding: "5px 10px", fontFamily: "monospace", fontSize: 10 }}>← PROGRAM</button>}
+                </div>
               </div>
               {(state.customWorkout?.exercises || []).map((ex, idx) => {
                 const lib = exerciseList.find((e) => e.name === ex.name);
@@ -2030,7 +2284,10 @@ export default function App() {
         {view === "programs" && <>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
             <div style={{ fontSize: 22, fontWeight: 900, letterSpacing: 2 }}>MY PROGRAMS</div>
-            <button onClick={() => { setEditingProgram(null); setShowBuilder(true); }} style={{ padding: "8px 16px", background: "#c8f542", border: "none", borderRadius: 6, color: "#0a0a0a", fontWeight: 900, fontSize: 13, cursor: "pointer" }}>+ NEW</button>
+            <div style={{ display: "flex", gap: 6 }}>
+              <button onClick={() => setShowWorkoutImport(true)} title="Import a program built in another Claude chat" style={{ padding: "8px 14px", background: "#1e1e1e", border: "1px solid #3c3c3c", borderRadius: 6, color: "#c8f542", fontFamily: "monospace", fontSize: 11, fontWeight: 700, cursor: "pointer", letterSpacing: 1 }}>↓ IMPORT</button>
+              <button onClick={() => { setEditingProgram(null); setShowBuilder(true); }} style={{ padding: "8px 16px", background: "#c8f542", border: "none", borderRadius: 6, color: "#0a0a0a", fontWeight: 900, fontSize: 13, cursor: "pointer" }}>+ NEW</button>
+            </div>
           </div>
           {Object.entries(state.programs).map(([pname, days]) => (
             <div key={pname} style={{ background: pname === state.activeProgram ? "rgba(200,245,66,0.03)" : "#181818", border: `1px solid ${pname === state.activeProgram ? "#c8f542" : "#181818"}`, borderRadius: 10, padding: "14px 16px", marginBottom: 10 }}>
@@ -2075,6 +2332,8 @@ export default function App() {
       {showBuilder && <ProgramBuilder programs={state.programs} editingName={editingProgram} onSave={saveProgram} onClose={() => { setShowBuilder(false); setEditingProgram(null); }} exercises={exerciseList} />}
 
       {showImport && <ImportModal existingHistory={state.history} onConfirm={importHistory} onClose={() => setShowImport(false)} />}
+
+      {showWorkoutImport && <WorkoutImportModal state={state} onImportWorkout={importCustomWorkout} onImportProgram={importProgramFromClaude} onClose={() => setShowWorkoutImport(false)} />}
 
       {prCelebration && <PrCelebration prs={prCelebration} onClose={() => setPrCelebration(null)} />}
 
