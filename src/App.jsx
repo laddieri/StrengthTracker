@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { STORAGE_KEY, readLocalState, writeLocalState, requestPersistence, mirrorState, listBackups, exportBackup, lastExportTime, parseBackup } from "./storage.js";
 
 const EXERCISE_LIBRARY = [
   { name: "Squat",                defaultSets: 3, defaultReps: 5, increment: 5,   category: "Lower" },
@@ -532,13 +533,14 @@ function seedImportedIncrements(state, exercises) {
   return next;
 }
 
-const STORAGE_KEY = "strengthtracker_state";
-const initialState = () => {
-  try {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved) return { equipment: DEFAULT_EQUIPMENT, customWorkout: { exercises: [] }, exerciseSettings: {}, customExercises: [], programMode: false, ...JSON.parse(saved) };
-  } catch { /* ignore corrupt or unavailable storage */ }
-  return { weights: { ...DEFAULT_WEIGHTS }, history: [], programs: DEFAULT_PROGRAMS, activeProgram: "Starting Strength", currentDayIndex: 0, equipment: DEFAULT_EQUIPMENT, customWorkout: { exercises: [] }, exerciseSettings: {}, customExercises: [], programMode: false };
+const defaultState = () => ({ weights: { ...DEFAULT_WEIGHTS }, history: [], programs: DEFAULT_PROGRAMS, activeProgram: "Starting Strength", currentDayIndex: 0, equipment: DEFAULT_EQUIPMENT, customWorkout: { exercises: [] }, exerciseSettings: {}, customExercises: [], programMode: false });
+// Fill in fields added in later versions so older saves/backups still load.
+const normalizeState = (saved) => ({ equipment: DEFAULT_EQUIPMENT, customWorkout: { exercises: [] }, exerciseSettings: {}, customExercises: [], programMode: false, ...saved, history: Array.isArray(saved.history) ? saved.history : [] });
+// loadFailed = data exists but couldn't be read; saving is blocked until the
+// user restores or explicitly starts fresh, so it is never overwritten.
+const initialLoad = () => {
+  const { state, ok } = readLocalState();
+  return { state: state ? normalizeState(state) : defaultState(), loadFailed: !ok, fresh: ok && !state };
 };
 
 // In-progress workout (completed work sets, warmup completion, light-day
@@ -1894,8 +1896,132 @@ function PrCelebration({ prs, onClose }) {
   );
 }
 
+// ---- Data safety UI ---------------------------------------------------------
+
+const BACKUP_NUDGE_KEY = "strengthtracker_backup_nudge_until";
+const DAY_MS = 86400000;
+const fmtWhen = (ms) => new Date(ms).toLocaleString(undefined, { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" });
+const bannerStyle = (color) => ({ background: "#1c1c1c", border: `1px solid ${color}`, borderRadius: 8, padding: "12px 14px", marginBottom: 14, fontSize: 11, color: "#d0d0d0", fontFamily: "monospace", lineHeight: 1.6 });
+const smallBtn = (primary) => ({ padding: "7px 12px", marginTop: 8, marginRight: 6, background: primary ? "#c8f542" : "#1e1e1e", border: primary ? "none" : "1px solid #3c3c3c", borderRadius: 6, color: primary ? "#0a0a0a" : "#c8f542", fontFamily: "monospace", fontSize: 11, fontWeight: 700, cursor: "pointer", letterSpacing: 1 });
+
+// Top-of-page warnings: unreadable data, failed saves, a recoverable backup,
+// or a reminder to export a backup file.
+function DataBanner({ saveBlocked, saveError, recoverable, onRestore, onStartFresh, onDismiss, onOpenSettings, historyCount, lastExport }) {
+  const [now] = useState(() => Date.now());
+  const [nudgeHidden, setNudgeHidden] = useState(() => {
+    try { return Number(localStorage.getItem(BACKUP_NUDGE_KEY)) > now; } catch { return false; }
+  });
+  if (recoverable) {
+    return (
+      <div style={bannerStyle("#c8f542")}>
+        {saveBlocked ? "Your saved data couldn't be read." : "No workout data was found in this browser."} A recovery copy with <b style={{ color: "#c8f542" }}>{recoverable.sessions} workouts</b> from {fmtWhen(recoverable.savedAt)} is available.
+        <div>
+          <button onClick={() => onRestore(recoverable.state)} style={smallBtn(true)}>RESTORE</button>
+          {saveBlocked ? <button onClick={onStartFresh} style={smallBtn(false)}>START FRESH</button> : <button onClick={onDismiss} style={smallBtn(false)}>NOT NOW</button>}
+        </div>
+      </div>
+    );
+  }
+  if (saveBlocked) {
+    return (
+      <div style={bannerStyle("#f7a07e")}>
+        Your saved data couldn't be read, so the app isn't saving changes (to avoid overwriting it). Restore a backup file in Settings, or start fresh.
+        <div>
+          <button onClick={onOpenSettings} style={smallBtn(true)}>RESTORE BACKUP</button>
+          <button onClick={onStartFresh} style={smallBtn(false)}>START FRESH</button>
+        </div>
+      </div>
+    );
+  }
+  if (saveError) {
+    return (
+      <div style={bannerStyle("#f7a07e")}>
+        ⚠ Changes are NOT being saved: {saveError} Export a backup now from Settings so nothing is lost.
+        <div><button onClick={onOpenSettings} style={smallBtn(true)}>GO TO SETTINGS</button></div>
+      </div>
+    );
+  }
+  const last = lastExport;
+  if (!nudgeHidden && historyCount >= 3 && (!last || now - last > 30 * DAY_MS)) {
+    const snooze = () => {
+      try { localStorage.setItem(BACKUP_NUDGE_KEY, String(now + 7 * DAY_MS)); } catch { /* ignore */ }
+      setNudgeHidden(true);
+    };
+    return (
+      <div style={bannerStyle("#383838")}>
+        {last ? `Last backup: ${fmtWhen(last)}.` : "You haven't backed up your workouts yet."} Your data only lives in this browser. Save a backup file somewhere safe (Files, iCloud, Drive).
+        <div>
+          <button onClick={onOpenSettings} style={smallBtn(true)}>BACK UP</button>
+          <button onClick={snooze} style={smallBtn(false)}>LATER</button>
+        </div>
+      </div>
+    );
+  }
+  return null;
+}
+
+// Settings section: export/restore a backup file and recover from the
+// automatic daily snapshots kept in IndexedDB.
+function DataSection({ state, persisted, onRestore, lastExport, onExported }) {
+  const fileRef = useRef(null);
+  const [backups, setBackups] = useState(null);
+  const [error, setError] = useState(null);
+  useEffect(() => { listBackups().then(setBackups); }, []);
+
+  const doExport = () => { exportBackup(state); onExported(lastExportTime()); };
+  const confirmRestore = (restored, label) => {
+    const n = restored.history?.length || 0;
+    if (!confirm(`Replace your current data (${state.history.length} workouts) with ${label} (${n} workouts)?\n\nTip: export a backup first if you're unsure.`)) return;
+    onRestore(restored);
+  };
+  const onFile = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setError(null);
+    try { confirmRestore(parseBackup(await file.text()), `the backup file`); }
+    catch (err) { setError(err.message); }
+  };
+
+  return (
+    <div style={{ marginTop: 24 }}>
+      <div style={{ fontSize: 10, color: "#808080", fontFamily: "monospace", letterSpacing: 1, marginBottom: 8 }}>YOUR DATA</div>
+      <div style={{ background: "#1c1c1c", border: "1px solid #383838", borderRadius: 8, padding: "12px 14px" }}>
+        <div style={{ fontSize: 11, color: "#909090", fontFamily: "monospace", lineHeight: 1.6 }}>
+          {state.history.length} workouts stored in this browser. Export a backup file regularly and keep it somewhere safe. It's the only copy that survives clearing site data, uninstalling the app, or switching devices.
+        </div>
+        <div style={{ fontSize: 10, color: "#707070", fontFamily: "monospace", marginTop: 6 }}>
+          Last backup: {lastExport ? fmtWhen(lastExport) : "never"}
+          {persisted === "granted" && <> · <span style={{ color: "#c8f542" }}>persistent storage on</span></>}
+          {persisted === "denied" && <> · browser may clear storage. Install the app to your home screen for more protection</>}
+        </div>
+        <button onClick={doExport} style={smallBtn(true)}>⬇ EXPORT BACKUP</button>
+        <button onClick={() => fileRef.current?.click()} style={smallBtn(false)}>⬆ RESTORE FROM FILE</button>
+        <input ref={fileRef} type="file" accept="application/json,.json" onChange={onFile} style={{ display: "none" }} />
+        {error && <div style={{ fontSize: 11, color: "#f7a07e", fontFamily: "monospace", marginTop: 8 }}>{error}</div>}
+
+        {backups?.length > 0 && <>
+          <div style={{ fontSize: 10, color: "#808080", fontFamily: "monospace", letterSpacing: 1, marginTop: 16, marginBottom: 6 }}>AUTOMATIC SNAPSHOTS (THIS BROWSER)</div>
+          {backups.map((b) => (
+            <div key={b.key} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderTop: "1px solid #2a2a2a" }}>
+              <span style={{ fontSize: 11, color: "#c0c0c0", fontFamily: "monospace" }}>{fmtWhen(b.savedAt)} · {b.sessions} workouts{b.key === "latest" ? " · latest" : ""}</span>
+              <button onClick={() => confirmRestore(b.state, `the snapshot from ${fmtWhen(b.savedAt)}`)} style={{ ...smallBtn(false), marginTop: 0, marginRight: 0, padding: "4px 10px", fontSize: 10 }}>RESTORE</button>
+            </div>
+          ))}
+        </>}
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
-  const [state, setState] = useState(initialState);
+  const [load] = useState(initialLoad);
+  const [state, setState] = useState(load.state);
+  const [saveBlocked, setSaveBlocked] = useState(load.loadFailed);
+  const [saveError, setSaveError] = useState(null);
+  const [recoverable, setRecoverable] = useState(null);
+  const [persisted, setPersisted] = useState(null);
+  const [lastExport, setLastExport] = useState(lastExportTime);
   const [view, setView] = useState("workout");
   const [initActive] = useState(loadActive);
   const [completedSets, setCompletedSets] = useState(initActive.completedSets);
@@ -2006,9 +2132,47 @@ export default function App() {
     setView("exercises");
   };
 
+  // Save to localStorage, then mirror to IndexedDB (debounced) as a recovery
+  // copy. Nothing is written while the stored data couldn't be read.
+  const fromOtherTab = useRef(false);
   useEffect(() => {
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch { /* ignore quota / unavailable storage */ }
-  }, [state]);
+    if (saveBlocked) return;
+    if (fromOtherTab.current) { fromOtherTab.current = false; return; }
+    setSaveError(writeLocalState(state));
+    const t = setTimeout(() => mirrorState(state), 1000);
+    return () => clearTimeout(t);
+  }, [state, saveBlocked]);
+
+  // Ask the browser not to evict our data, and offer to recover from the
+  // IndexedDB mirror if localStorage was wiped or couldn't be read.
+  useEffect(() => {
+    requestPersistence().then(setPersisted);
+    if (!load.fresh && !load.loadFailed) return;
+    listBackups().then((list) => {
+      const best = list.find((b) => b.sessions > 0);
+      if (best) setRecoverable(best);
+    });
+  }, [load]);
+
+  // Keep tabs in sync so a stale tab can't save older data over newer data.
+  useEffect(() => {
+    const onStorage = (e) => {
+      if (e.key !== STORAGE_KEY || !e.newValue) return;
+      try { fromOtherTab.current = true; setState(normalizeState(JSON.parse(e.newValue))); } catch { fromOtherTab.current = false; }
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
+
+  const restoreState = (restored) => {
+    setState(normalizeState(restored));
+    setSaveBlocked(false);
+    setRecoverable(null);
+  };
+  const startFresh = () => {
+    if (!confirm("Start with empty data? Your unreadable data stays saved separately in this browser, but the app will stop using it.")) return;
+    setSaveBlocked(false);
+  };
 
   // Persist the in-progress workout so completed sets survive navigation/reload.
   useEffect(() => {
@@ -2224,6 +2388,7 @@ export default function App() {
       </div>
 
       <div style={{ maxWidth: 580, margin: "0 auto", padding: "16px 14px 80px" }}>
+        <DataBanner saveBlocked={saveBlocked} saveError={saveError} recoverable={recoverable} onRestore={restoreState} onStartFresh={startFresh} onDismiss={() => setRecoverable(null)} onOpenSettings={() => setView("equipment")} historyCount={state.history.length} lastExport={lastExport} />
         {view === "workout" && <>
           {inCustom ? (
             <div style={{ background: "#181818", border: "1px solid #383838", borderRadius: 10, padding: "12px 16px", marginBottom: 14 }}>
@@ -2327,7 +2492,10 @@ export default function App() {
 
         {view === "records" && <RecordsView history={state.history} />}
 
-        {view === "equipment" && <EquipmentView equipment={state.equipment} onUpdate={updateEquipment} notifPermission={notifPermission} onEnableNotifications={enableNotifications} programMode={state.programMode} onToggleProgramMode={setProgramMode} />}
+        {view === "equipment" && <>
+          <EquipmentView equipment={state.equipment} onUpdate={updateEquipment} notifPermission={notifPermission} onEnableNotifications={enableNotifications} programMode={state.programMode} onToggleProgramMode={setProgramMode} />
+          <DataSection state={state} persisted={persisted} onRestore={restoreState} lastExport={lastExport} onExported={setLastExport} />
+        </>}
 
         {view === "programs" && <>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
