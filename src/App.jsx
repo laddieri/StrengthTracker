@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { STORAGE_KEY, readLocalState, writeLocalState, requestPersistence, mirrorState, listBackups, exportBackup, lastExportTime, parseBackup } from "./storage.js";
+import { deriveLink, encryptMessage, publish, normalizeCode, isValidCode, formatCode, cryptoAvailable, MAX_MESSAGE_BYTES } from "./tvLink.js";
 
 const EXERCISE_LIBRARY = [
   { name: "Squat",                defaultSets: 3, defaultReps: 5, increment: 5,   category: "Lower" },
@@ -567,6 +568,103 @@ const workoutStartTime = (completedSets) => {
   return Number.isFinite(min) ? min : null;
 };
 
+
+// ---- TV dashboard snapshot -------------------------------------------------
+// Compact, self-contained description of the current workout for the TV page
+// (see TvView.jsx): everything the TV needs is precomputed here, using the
+// same light-day / warmup / plate math as ExerciseCard, so the TV never needs
+// the full app state.
+function platesText(weight, barWeight, plates) {
+  if (!(weight > 0)) return "";
+  if (weight <= barWeight) return "bar";
+  const loading = calcPlateLoading(weight, barWeight, plates);
+  if (loading === null) return "?";
+  return loading.map(({ weight: w, count }) => (count > 1 ? `${count}×${w}` : `${w}`)).join(" + ");
+}
+
+function buildTvSnapshot({ state, exercises, completedSets, warmupDone, warmupOverrides, lightDays, inCustom, title, sub }) {
+  const eq = state.equipment || DEFAULT_EQUIPMENT;
+  const bar = eq.bars.find((b) => b.name === eq.activeBar) || eq.bars[0] || { weight: 45 };
+  const pl = (w) => platesText(w, bar.weight, eq.plates);
+  const ex = exercises.map((e) => {
+    const settings = getExerciseSettings(state, e.name);
+    const increment = settings.increment ?? e.increment;
+    const unit = increment > 0 ? increment : 2.5;
+    const weight = state.weights[e.name] ?? 0;
+    const light = !!(inCustom && lightDays[e.name]);
+    const effWeight = light ? Math.round((Math.round((weight * 0.85) / unit) * unit) * 100) / 100 : weight;
+    const effReps = light ? 5 : e.reps;
+    const sets = completedSets[e.name]?.sets || e.plan || Array.from({ length: e.sets }, () => ({ weight: effWeight, reps: effReps }));
+    const warm = effWeight > 0 ? resolveWarmupRows(warmupOverrides[e.name] || defaultWarmupRows(settings.warmup), effWeight, bar.weight, increment) : [];
+    const wd = warmupDone[e.name] || {};
+    return {
+      n: e.name, w: effWeight, r: effReps, ...(light ? { light: 1 } : {}),
+      wu: warm.map((row, i) => [row.weight, row.reps, wd[i] ? 1 : 0, pl(row.weight)]),
+      s: sets.map((st) => [st.weight ?? 0, st.reps ?? 0, st.completed ? 1 : 0, st.completedAt || 0, pl(st.weight ?? 0)]),
+    };
+  });
+  return { v: 1, title, sub, bar: bar.weight, ex };
+}
+
+// Shrinks a snapshot until its encrypted form fits in one relay message.
+function fitTvSnapshot(snap) {
+  const sizeOf = (o) => Math.ceil(((JSON.stringify(o).length + 28) * 4) / 3) + 8;
+  if (sizeOf(snap) <= MAX_MESSAGE_BYTES) return snap;
+  let s = { ...snap, ex: snap.ex.map((e) => ({ ...e, wu: e.wu.map((w) => [w[0], w[1], w[2], ""]) })) };
+  if (sizeOf(s) <= MAX_MESSAGE_BYTES) return s;
+  s = { ...s, ex: s.ex.map((e) => ({ ...e, wu: [] })) };
+  if (sizeOf(s) <= MAX_MESSAGE_BYTES) return s;
+  return { ...s, ex: s.ex.map((e) => ({ ...e, s: e.s.map((x) => [x[0], x[1], x[2], x[3], ""]) })) };
+}
+
+const NO_EXERCISES = [];
+const TV_CODE_KEY = "strengthtracker_tv_code";
+const TV_HEARTBEAT_MS = 5 * 60 * 1000;
+
+function TvLinkSection({ code, status, onPair, onUnpair }) {
+  const [input, setInput] = useState("");
+  const [err, setErr] = useState(null);
+  const tvUrl = `${window.location.origin}/tv`;
+  const submit = () => {
+    const c = normalizeCode(input);
+    if (!isValidCode(c)) { setErr("Enter the 8-character code shown on your TV."); return; }
+    setErr(null); setInput(""); onPair(c);
+  };
+  const box = { background: "#1c1c1c", border: "1px solid #383838", borderRadius: 8, padding: "12px 14px" };
+  return (
+    <div style={{ marginTop: 24 }}>
+      <div style={{ fontSize: 10, color: "#808080", fontFamily: "monospace", letterSpacing: 1, marginBottom: 8 }}>TV DISPLAY</div>
+      <div style={box}>
+        <div style={{ fontSize: 11, color: "#909090", fontFamily: "monospace", lineHeight: 1.6 }}>
+          Show your live workout on a TV. On the TV's browser open <span style={{ color: "#c8f542" }}>{tvUrl}</span>, then enter the code it shows here.
+        </div>
+        {!cryptoAvailable() ? (
+          <div style={{ fontSize: 11, color: "#e0a252", fontFamily: "monospace", marginTop: 8 }}>This browser can't encrypt the link (it needs HTTPS).</div>
+        ) : code ? (
+          <>
+            <div style={{ fontSize: 12, color: "#d0d0d0", fontFamily: "monospace", marginTop: 10 }}>
+              📺 Linked to <span style={{ color: "#c8f542", fontWeight: 700 }}>{formatCode(code)}</span>
+            </div>
+            <div style={{ fontSize: 10, fontFamily: "monospace", marginTop: 4, color: status.error ? "#f7a07e" : "#707070" }}>
+              {status.error ? `Couldn't reach the TV relay: ${status.error}` : status.at ? `Last update sent ${new Date(status.at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" })}` : "Sending…"}
+            </div>
+            <button onClick={onUnpair} style={smallBtn(false)}>DISCONNECT</button>
+          </>
+        ) : (
+          <div style={{ display: "flex", gap: 6, marginTop: 10, alignItems: "center" }}>
+            <input value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") submit(); }} placeholder="ABCD-EFGH" autoCapitalize="characters" autoCorrect="off" spellCheck={false}
+              style={{ flex: 1, minWidth: 0, background: "#111", border: "1px solid #3c3c3c", borderRadius: 6, color: "#e0e0e0", fontSize: 15, fontWeight: 700, padding: "8px 10px", fontFamily: "monospace", letterSpacing: 2, outline: "none", textTransform: "uppercase" }} />
+            <button onClick={submit} style={{ ...smallBtn(true), marginTop: 0, marginRight: 0 }}>CONNECT</button>
+          </div>
+        )}
+        {err && <div style={{ fontSize: 11, color: "#f7a07e", fontFamily: "monospace", marginTop: 8 }}>{err}</div>}
+        <div style={{ fontSize: 9, color: "#606060", fontFamily: "monospace", marginTop: 10, lineHeight: 1.5 }}>
+          Updates go through the free ntfy.sh relay, end-to-end encrypted with a key derived from the code.
+        </div>
+      </div>
+    </div>
+  );
+}
 
 // Numeric input that avoids the controlled-number quirk where leading zeros
 // (e.g. "03") stick around. Manages its own string while focused, strips
@@ -2282,12 +2380,50 @@ export default function App() {
   }, [exerciseList, state.history]);
   const program = state.programs[state.activeProgram] || [];
   const day = program[state.currentDayIndex] || program[0];
-  const programExercises = day?.exercises || [];
+  const programExercises = day?.exercises || NO_EXERCISES;
   // Custom is the default mode; program (recurring) mode only applies when the
   // user has enabled it in settings.
   const inCustom = !state.programMode || isCustomMode;
-  const activeExercises = inCustom ? (state.customWorkout?.exercises || []) : programExercises;
+  const activeExercises = inCustom ? (state.customWorkout?.exercises || NO_EXERCISES) : programExercises;
   const allDone = activeExercises.length > 0 && activeExercises.every((ex) => completedSets[ex.name]?.done);
+
+  // ---- TV dashboard link: publish the live workout to a paired TV. --------
+  const [tvCode, setTvCode] = useState(() => { try { return localStorage.getItem(TV_CODE_KEY) || null; } catch { return null; } });
+  const [tvStatus, setTvStatus] = useState({ at: null, error: null });
+  const [tvPing, setTvPing] = useState(0);
+  const pairTv = (code) => { try { localStorage.setItem(TV_CODE_KEY, code); } catch { /* ignore */ } setTvStatus({ at: null, error: null }); setTvCode(code); };
+  const unpairTv = () => { try { localStorage.removeItem(TV_CODE_KEY); } catch { /* ignore */ } setTvCode(null); };
+  const tvSnapshotJson = useMemo(() => {
+    if (!tvCode) return null;
+    const title = inCustom ? "Custom Workout" : (state.activeProgram || "Workout");
+    const sub = inCustom ? null : (day ? `Day ${day.label}` : null);
+    return JSON.stringify(fitTvSnapshot(buildTvSnapshot({ state, exercises: activeExercises, completedSets, warmupDone, warmupOverrides, lightDays, inCustom, title, sub })));
+  }, [tvCode, state, activeExercises, completedSets, warmupDone, warmupOverrides, lightDays, inCustom, day]);
+  // Re-send occasionally and when the app comes back to the foreground, so a
+  // TV that missed an update catches up (the relay keeps the latest message).
+  useEffect(() => {
+    if (!tvCode) return;
+    const bump = () => { if (document.visibilityState === "visible") setTvPing((n) => n + 1); };
+    const id = setInterval(bump, TV_HEARTBEAT_MS);
+    document.addEventListener("visibilitychange", bump);
+    return () => { clearInterval(id); document.removeEventListener("visibilitychange", bump); };
+  }, [tvCode]);
+  useEffect(() => {
+    if (!tvCode || !tvSnapshotJson || !cryptoAvailable()) return;
+    let cancelled = false;
+    // Debounced so quick edits (typing a weight) collapse into one message.
+    const t = setTimeout(async () => {
+      try {
+        const { topic, key } = await deriveLink(tvCode);
+        const msg = await encryptMessage(key, { ...JSON.parse(tvSnapshotJson), t: Date.now() });
+        await publish(topic, msg);
+        if (!cancelled) setTvStatus({ at: Date.now(), error: null });
+      } catch (e) {
+        if (!cancelled) setTvStatus((s) => ({ ...s, error: e?.message || "network error" }));
+      }
+    }, 700);
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [tvCode, tvSnapshotJson, tvPing]);
 
   const updateWeight = (name, val) => setState((s) => ({ ...s, weights: { ...s.weights, [name]: Math.max(0, val) } }));
   const markComplete = useCallback((name, isDone, setsData) => setCompletedSets((p) => ({ ...p, [name]: { done: isDone, sets: setsData } })), []);
@@ -2494,6 +2630,7 @@ export default function App() {
 
         {view === "equipment" && <>
           <EquipmentView equipment={state.equipment} onUpdate={updateEquipment} notifPermission={notifPermission} onEnableNotifications={enableNotifications} programMode={state.programMode} onToggleProgramMode={setProgramMode} />
+          <TvLinkSection code={tvCode} status={tvStatus} onPair={pairTv} onUnpair={unpairTv} />
           <DataSection state={state} persisted={persisted} onRestore={restoreState} lastExport={lastExport} onExported={setLastExport} />
         </>}
 
