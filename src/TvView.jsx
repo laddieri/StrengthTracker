@@ -3,7 +3,8 @@
 // through the relay in tvLink.js. Sized in viewport units so it reads the
 // same on a 960×540 TV browser and a 4K one, with padding for TV overscan.
 import { useEffect, useMemo, useState } from "react";
-import { generateCode, isValidCode, formatCode, deriveLink, decryptMessage, subscribe, cryptoAvailable } from "./tvLink.js";
+import { pairingUrl, generateCode, isValidCode, formatCode, deriveLink, decryptMessage, subscribe, cryptoAvailable } from "./tvLink.js";
+import qrcode from "qrcode-generator";
 import "./tv.css";
 
 const CODE_KEY = "strengthtracker_tv_display_code";
@@ -100,13 +101,39 @@ function PlateStack({ text }) {
   );
 }
 
+// QR code for the phone's camera: opens the app with the code filled in.
+function PairQr({ code, className }) {
+  const { size, path } = useMemo(() => {
+    const qr = qrcode(0, "M");
+    qr.addData(pairingUrl(code));
+    qr.make();
+    const n = qr.getModuleCount();
+    let d = "";
+    for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) if (qr.isDark(r, c)) d += `M${c + 4} ${r + 4}h1v1h-1z`;
+    return { size: n + 8, path: d }; // 4-module quiet zone on each side
+  }, [code]);
+  return (
+    <svg className={className} viewBox={`0 0 ${size} ${size}`} shapeRendering="crispEdges" role="img" aria-label="QR code to link your phone">
+      <rect width={size} height={size} fill="#ffffff" />
+      <path d={path} fill="#000000" />
+    </svg>
+  );
+}
+
 function PairingScreen({ code, status, error }) {
   return (
     <div className="tv-root tv-center">
       <div className="tv-brand">STRENGTH TRACKER · TV</div>
-      <div className="tv-pair-code">{formatCode(code)}</div>
-      <div className="tv-pair-steps">
-        On your phone, open Strength Tracker → <b>Settings</b> → <b>TV Display</b> and enter this code.
+      <div className="tv-pair-body">
+        <div className="tv-pair-col">
+          <PairQr code={code} className="tv-pair-qr" />
+          <div className="tv-pair-steps">Scan with your phone's camera</div>
+        </div>
+        <div className="tv-pair-or">or</div>
+        <div className="tv-pair-col">
+          <div className="tv-pair-code">{formatCode(code)}</div>
+          <div className="tv-pair-steps">Enter in <b>Settings</b> → <b>TV Display</b></div>
+        </div>
       </div>
       <div className="tv-pair-status">
         {error ? <span className="tv-warn">{error}</span> : status === "live" ? "Waiting for your phone…" : "Connecting…"}
@@ -252,6 +279,12 @@ export default function TvView() {
         {staleMin >= 10 && <span className="tv-dim"> · last update {staleMin} min ago</span>}
         {showCode && <span className="tv-dim"> · TV code <b className="tv-green">{formatCode(code)}</b></span>}
       </footer>
+      {showCode && (
+        <div className="tv-qr-pop">
+          <PairQr code={code} className="tv-qr-pop-img" />
+          <div>Scan to link a phone</div>
+        </div>
+      )}
     </div>
   );
 }

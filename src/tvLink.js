@@ -30,6 +30,10 @@ export const normalizeCode = (input) => String(input || "").toUpperCase().replac
 export const isValidCode = (code) => code.length === CODE_LEN && [...code].every((c) => ALPHABET.includes(c));
 export const formatCode = (code) => (code.length > 4 ? `${code.slice(0, 4)}-${code.slice(4)}` : code);
 
+// Link a TV shows as a QR code; the phone app pairs when opened with it.
+export const PAIR_PARAM = "pairtv";
+export const pairingUrl = (code) => `${window.location.origin}/?${PAIR_PARAM}=${code}`;
+
 export const cryptoAvailable = () => typeof crypto !== "undefined" && !!crypto.subtle && typeof TextEncoder !== "undefined";
 
 const b64 = (bytes) => { let s = ""; bytes.forEach((b) => { s += String.fromCharCode(b); }); return btoa(s); };

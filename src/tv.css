@@ -20,13 +20,22 @@
 
 /* Pairing */
 .tv-brand { font-size: 2vh; font-weight: 900; letter-spacing: 0.4vw; color: #c8f542; }
+.tv-pair-body { display: flex; align-items: center; justify-content: center; gap: 5vw; margin: 6vh 0 3vh; }
+.tv-pair-col { display: flex; flex-direction: column; align-items: center; gap: 3vh; }
+.tv-pair-qr { width: 42vh; height: 42vh; border-radius: 1.5vh; }
+.tv-pair-or { font-size: 3vh; color: #6a6a6a; font-weight: 700; letter-spacing: 0.2vw; }
 .tv-pair-code {
-  margin: 5vh 0 4vh; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-  font-size: 15vh; font-weight: 800; letter-spacing: 1.2vw; color: #f0f0f0;
-  background: #161616; border: 0.3vh solid #383838; border-radius: 2vh; padding: 2vh 4vw;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 9vh; font-weight: 800; letter-spacing: 0.6vw; color: #f0f0f0;
+  background: #161616; border: 0.3vh solid #383838; border-radius: 2vh; padding: 2vh 2.5vw;
 }
-.tv-pair-steps { font-size: 3.4vh; color: #c0c0c0; max-width: 70vw; line-height: 1.5; }
+.tv-pair-steps { font-size: 3vh; color: #c0c0c0; line-height: 1.5; }
 .tv-pair-steps b { color: #c8f542; }
+.tv-qr-pop {
+  position: fixed; right: 3.5vw; bottom: 7vh; background: #161616; border: 0.3vh solid #383838; border-radius: 2vh;
+  padding: 2vh; text-align: center; font-size: 2.2vh; color: #c0c0c0; display: flex; flex-direction: column; gap: 1.5vh;
+}
+.tv-qr-pop-img { width: 26vh; height: 26vh; border-radius: 1vh; }
 .tv-pair-status { margin-top: 4vh; font-size: 2.6vh; color: #8a8a8a; animation: tv-breathe 2.4s ease-in-out infinite; }
 
 /* Header / footer */

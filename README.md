@@ -17,7 +17,7 @@ If you are developing a production application, we recommend using TypeScript wi
 
 ## TV dashboard
 
-Open `/tv` on a TV's browser (on Android TV, e.g. TV Bro). It shows a pairing code; enter it on your phone under
+Open `/tv` on a TV's browser (on Android TV, e.g. TV Bro). It shows a QR code — scan it with your phone camera — or a pairing code to enter on your phone under
 **Settings → TV Display**. The phone then mirrors the live workout — current set, plates per side, warmups, rest
 timer — to the TV via the free [ntfy.sh](https://ntfy.sh) relay, AES-GCM encrypted with a key derived from the
 code (see `src/tvLink.js`, `src/TvView.jsx`).

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { STORAGE_KEY, readLocalState, writeLocalState, requestPersistence, mirrorState, listBackups, exportBackup, lastExportTime, parseBackup } from "./storage.js";
-import { deriveLink, encryptMessage, publish, normalizeCode, isValidCode, formatCode, cryptoAvailable, MAX_MESSAGE_BYTES } from "./tvLink.js";
+import { PAIR_PARAM, deriveLink, encryptMessage, publish, normalizeCode, isValidCode, formatCode, cryptoAvailable, MAX_MESSAGE_BYTES } from "./tvLink.js";
 
 const EXERCISE_LIBRARY = [
   { name: "Squat",                defaultSets: 3, defaultReps: 5, increment: 5,   category: "Lower" },
@@ -636,7 +636,7 @@ function TvLinkSection({ code, status, onPair, onUnpair }) {
       <div style={{ fontSize: 10, color: "#808080", fontFamily: "monospace", letterSpacing: 1, marginBottom: 8 }}>TV DISPLAY</div>
       <div style={box}>
         <div style={{ fontSize: 11, color: "#909090", fontFamily: "monospace", lineHeight: 1.6 }}>
-          Show your live workout on a TV. On the TV's browser open <span style={{ color: "#c8f542" }}>{tvUrl}</span>, then enter the code it shows here.
+          Show your live workout on a TV. On the TV's browser open <span style={{ color: "#c8f542" }}>{tvUrl}</span>, then scan the QR code it shows with your phone's camera, or enter the code here.
         </div>
         {!cryptoAvailable() ? (
           <div style={{ fontSize: 11, color: "#e0a252", fontFamily: "monospace", marginTop: 8 }}>This browser can't encrypt the link (it needs HTTPS).</div>
@@ -2392,6 +2392,20 @@ export default function App() {
   const [tvStatus, setTvStatus] = useState({ at: null, error: null });
   const [tvPing, setTvPing] = useState(0);
   const pairTv = (code) => { try { localStorage.setItem(TV_CODE_KEY, code); } catch { /* ignore */ } setTvStatus({ at: null, error: null }); setTvCode(code); };
+  // Opened from the TV's QR code (/?pairtv=CODE): link to that TV, drop the
+  // code from the address bar, and show the TV Display settings.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const scanned = normalizeCode(params.get(PAIR_PARAM));
+    if (!params.has(PAIR_PARAM)) return;
+    params.delete(PAIR_PARAM);
+    const qs = params.toString();
+    window.history.replaceState(window.history.state, "", window.location.pathname + (qs ? `?${qs}` : "") + window.location.hash);
+    if (!isValidCode(scanned)) return;
+    try { localStorage.setItem(TV_CODE_KEY, scanned); } catch { /* ignore */ }
+    setTvCode(scanned); // one-time read of the launch URL
+    setView("equipment");
+  }, []);
   const unpairTv = () => { try { localStorage.removeItem(TV_CODE_KEY); } catch { /* ignore */ } setTvCode(null); };
   const tvSnapshotJson = useMemo(() => {
     if (!tvCode) return null;
