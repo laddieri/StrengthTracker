@@ -14,3 +14,10 @@ The React Compiler is not enabled on this template because of its impact on dev 
 ## Expanding the ESLint configuration
 
 If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+
+## TV dashboard
+
+Open `/tv` on a TV's browser (on Android TV, e.g. TV Bro). It shows a pairing code; enter it on your phone under
+**Settings → TV Display**. The phone then mirrors the live workout — current set, plates per side, warmups, rest
+timer — to the TV via the free [ntfy.sh](https://ntfy.sh) relay, AES-GCM encrypted with a key derived from the
+code (see `src/tvLink.js`, `src/TvView.jsx`).
